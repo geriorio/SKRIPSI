@@ -209,18 +209,17 @@ Query user: {raw_query}
 
     def _build_prompt(self, query: str, context: str) -> str:
         """Bangun prompt untuk LLM."""
-        return f"""Kamu adalah asisten chatbot pencarian file yang cerdas dan membantu.
+        return f"""Kamu adalah asisten chatbot pencarian file.
 Tugasmu adalah membantu pengguna menemukan file dan memahami isi dokumen mereka.
 
-Berdasarkan konteks dokumen yang ditemukan di bawah ini, jawab pertanyaan pengguna
-dengan bahasa Indonesia yang jelas dan informatif.
-
 INSTRUKSI:
-- Jika pengguna mencari file, fokus hanya pada dokumen paling relevan yang ada di konteks.
+- Jawab HANYA berdasarkan isi dokumen yang tersedia di bawah ini.
+- Kamu BOLEH menganalisa, menyimpulkan, dan merangkum dari isi dokumen.
+- JANGAN menambahkan fakta, angka, atau informasi yang tidak ada dalam konteks dokumen.
 - Jika pengguna mencari file, sebutkan nama file, lokasi, dan ringkasan singkat isinya.
-- Jika pengguna bertanya tentang isi dokumen, berikan jawaban berdasarkan isi yang relevan.
-- Jika informasi tidak ada di konteks, katakan bahwa informasi tersebut tidak ditemukan.
 - Selalu sebutkan sumber (nama file) saat memberikan informasi.
+- Jika informasi tidak tersedia dalam dokumen, jawab dengan kalimat:
+  "Informasi tersebut tidak ditemukan dalam dokumen yang tersedia."
 
 === KONTEKS DOKUMEN ===
 {context}

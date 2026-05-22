@@ -653,7 +653,7 @@ class SearchService:
             # - bonus keyword untuk kecocokan nama/path
             coverage_bonus = min(len(top3), 3) * 0.01
             keyword_bonus = min(keyword_hits, 3) * 0.02
-            rank_score = (0.55 * avg_top3) + (0.35 * max_sim) + coverage_bonus + keyword_bonus
+            rank_score = (0.50 * avg_top3) + (0.50 * max_sim) + coverage_bonus + keyword_bonus
 
             # Untuk query "cari file", kecocokan nama/path harus lebih dominan
             # daripada kemiripan semantik isi dokumen.
