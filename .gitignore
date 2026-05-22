@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables — JANGAN di-commit
+.env
+.env.*
+
+# OAuth credentials & tokens — RAHASIA
+backend/credentials/*.json
+
+# Log files
+*.log
+*.stackdump
+
+# IDE & OS
+.idea/
+.vscode/
+.claude/
+*.DS_Store
+Thumbs.db
+
+# Database lokal
+*.db
+*.sqlite
