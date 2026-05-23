@@ -26,16 +26,6 @@ class Settings(BaseSettings):
         "https://www.googleapis.com/auth/drive.readonly"
     ]
 
-    # --- Microsoft OneDrive OAuth ---
-    ONEDRIVE_CLIENT_ID: str = ""
-    ONEDRIVE_CLIENT_SECRET: str = ""
-    ONEDRIVE_TENANT_ID: str = "common"
-    ONEDRIVE_REDIRECT_URI: str = "http://localhost:8001/api/auth/onedrive/callback"
-    ONEDRIVE_TOKEN_FILE: str = ""
-    ONEDRIVE_SCOPES: List[str] = [
-        "offline_access", "User.Read", "Files.Read.All"
-    ]
-
     # --- Crawler ---
     CRAWL_DIRECTORIES: List[str] = []
     EXCLUDE_DIRECTORIES: List[str] = []
@@ -43,8 +33,6 @@ class Settings(BaseSettings):
     AUTO_INCREMENTAL_INDEX_INTERVAL_MINUTES: int = 60
     AUTO_GDRIVE_INCREMENTAL_INDEX_ENABLED: bool = False
     AUTO_GDRIVE_FOLDER_IDS: List[str] = []
-    AUTO_ONEDRIVE_INCREMENTAL_INDEX_ENABLED: bool = False
-    AUTO_ONEDRIVE_FOLDER_IDS: List[str] = []
     SUPPORTED_EXTENSIONS: List[str] = [
         ".pdf", ".docx", ".xlsx", ".csv", ".ppt", ".pptx", ".txt"
     ]

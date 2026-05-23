@@ -42,8 +42,6 @@ def get_or_create_watch_config(db: Session) -> IndexWatchConfig:
             exclude_directories="[]",
             gdrive_folder_ids="[]",
             gdrive_monitor_all=False,
-            onedrive_folder_ids="[]",
-            onedrive_monitor_all=False,
         )
         db.add(config)
         db.commit()
@@ -55,14 +53,11 @@ def get_watch_config_payload(db: Session) -> Dict[str, Any]:
     config = get_or_create_watch_config(db)
     local_check_stats = _loads_stats(config.last_local_check_stats)
     gdrive_check_stats = _loads_stats(config.last_gdrive_check_stats)
-    onedrive_check_stats = _loads_stats(config.last_onedrive_check_stats)
     return {
         "local_directories": _loads_list(config.local_directories),
         "exclude_directories": _loads_list(config.exclude_directories),
         "gdrive_folder_ids": _loads_list(config.gdrive_folder_ids),
         "gdrive_monitor_all": bool(config.gdrive_monitor_all),
-        "onedrive_folder_ids": _loads_list(config.onedrive_folder_ids),
-        "onedrive_monitor_all": bool(config.onedrive_monitor_all),
         "updated_at": config.updated_at.isoformat() if config.updated_at else None,
         "last_local_index_started_at": (
             config.last_local_index_started_at.isoformat()
@@ -71,10 +66,6 @@ def get_watch_config_payload(db: Session) -> Dict[str, Any]:
         "last_gdrive_index_started_at": (
             config.last_gdrive_index_started_at.isoformat()
             if config.last_gdrive_index_started_at else None
-        ),
-        "last_onedrive_index_started_at": (
-            config.last_onedrive_index_started_at.isoformat()
-            if config.last_onedrive_index_started_at else None
         ),
         "last_local_check_at": (
             config.last_local_check_at.isoformat()
@@ -88,12 +79,6 @@ def get_watch_config_payload(db: Session) -> Dict[str, Any]:
         ),
         "last_gdrive_check_has_changes": config.last_gdrive_check_has_changes,
         "last_gdrive_check_stats": gdrive_check_stats,
-        "last_onedrive_check_at": (
-            config.last_onedrive_check_at.isoformat()
-            if config.last_onedrive_check_at else None
-        ),
-        "last_onedrive_check_has_changes": config.last_onedrive_check_has_changes,
-        "last_onedrive_check_stats": onedrive_check_stats,
     }
 
 
@@ -117,8 +102,6 @@ def update_watch_config(
     exclude_directories: Optional[List[str]] = None,
     gdrive_folder_ids: Optional[List[str]] = None,
     gdrive_monitor_all: Optional[bool] = None,
-    onedrive_folder_ids: Optional[List[str]] = None,
-    onedrive_monitor_all: Optional[bool] = None,
 ) -> Dict[str, Any]:
     config = get_or_create_watch_config(db)
 
@@ -130,10 +113,6 @@ def update_watch_config(
         config.gdrive_folder_ids = _dumps_list(gdrive_folder_ids)
     if gdrive_monitor_all is not None:
         config.gdrive_monitor_all = bool(gdrive_monitor_all)
-    if onedrive_folder_ids is not None:
-        config.onedrive_folder_ids = _dumps_list(onedrive_folder_ids)
-    if onedrive_monitor_all is not None:
-        config.onedrive_monitor_all = bool(onedrive_monitor_all)
 
     config.updated_at = datetime.utcnow()
     db.add(config)
@@ -152,13 +131,6 @@ def mark_local_index_started(db: Session):
 def mark_gdrive_index_started(db: Session):
     config = get_or_create_watch_config(db)
     config.last_gdrive_index_started_at = datetime.utcnow()
-    db.add(config)
-    db.commit()
-
-
-def mark_onedrive_index_started(db: Session):
-    config = get_or_create_watch_config(db)
-    config.last_onedrive_index_started_at = datetime.utcnow()
     db.add(config)
     db.commit()
 
@@ -183,16 +155,6 @@ def mark_gdrive_check_result(db: Session, stats: Dict[str, Any]):
     db.commit()
 
 
-def mark_onedrive_check_result(db: Session, stats: Dict[str, Any]):
-    config = get_or_create_watch_config(db)
-    changes = int(stats.get("new", 0)) + int(stats.get("updated", 0)) + int(stats.get("deleted", 0))
-    config.last_onedrive_check_at = datetime.utcnow()
-    config.last_onedrive_check_has_changes = changes > 0
-    config.last_onedrive_check_stats = _dumps_stats(stats)
-    db.add(config)
-    db.commit()
-
-
 def get_effective_watch_targets(db: Session) -> Dict[str, Any]:
     """
     Ambil target watch yang efektif.
@@ -207,8 +169,6 @@ def get_effective_watch_targets(db: Session) -> Dict[str, Any]:
     exclude_dirs = cfg.get("exclude_directories") or []
     gdrive_folder_ids = cfg.get("gdrive_folder_ids") or []
     gdrive_monitor_all = bool(cfg.get("gdrive_monitor_all"))
-    onedrive_folder_ids = cfg.get("onedrive_folder_ids") or []
-    onedrive_monitor_all = bool(cfg.get("onedrive_monitor_all"))
 
     # Fallback local dari file_path yang sudah ter-index
     if not local_dirs:
@@ -240,7 +200,5 @@ def get_effective_watch_targets(db: Session) -> Dict[str, Any]:
         "exclude_directories": exclude_dirs,
         "gdrive_folder_ids": gdrive_folder_ids,
         "gdrive_monitor_all": gdrive_monitor_all,
-        "onedrive_folder_ids": onedrive_folder_ids,
-        "onedrive_monitor_all": onedrive_monitor_all,
         "source": "watch_config_or_indexed_files",
     }

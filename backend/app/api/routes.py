@@ -29,21 +29,18 @@ from app.services.indexer import IndexingService
 from app.services.searcher import SearchService
 from app.services.rag import RAGService
 from app.services.gdrive_service import GoogleDriveService
-from app.services.onedrive_service import OneDriveService
 from app.services.watch_config import (
     get_watch_config_payload,
     get_effective_watch_targets,
     update_watch_config,
     mark_local_index_started,
     mark_gdrive_index_started,
-    mark_onedrive_index_started,
 )
 from app.api.schemas import (
     ChatRequest, ChatResponse,
     SearchRequest, SearchResponse,
     IndexRequest, IndexResponse,
     GoogleDriveIndexRequest,
-    OneDriveIndexRequest,
     IndexWatchConfigRequest,
     IndexWatchConfigResponse,
     IndexProgressResponse,
@@ -51,7 +48,6 @@ from app.api.schemas import (
     IndexedDirectoryInfo,
     IndexedFileItem, IndexedFileListResponse,
     GoogleAuthUrlResponse, GoogleAuthStatusResponse,
-    OneDriveAuthUrlResponse, OneDriveAuthStatusResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,7 +60,6 @@ _indexer: IndexingService | None = None
 _searcher: SearchService | None = None
 _rag: RAGService | None = None
 _gdrive: GoogleDriveService | None = None
-_onedrive: OneDriveService | None = None
 
 
 def get_indexer() -> IndexingService:
@@ -94,12 +89,6 @@ def get_gdrive() -> GoogleDriveService:
         _gdrive = GoogleDriveService()
     return _gdrive
 
-
-def get_onedrive() -> OneDriveService:
-    global _onedrive
-    if _onedrive is None:
-        _onedrive = OneDriveService()
-    return _onedrive
 
 
 def _merge_search_results(primary: List[dict], secondary: List[dict]) -> List[dict]:
@@ -175,14 +164,6 @@ def _virtual_directory_path(file_path: str | None, source: str | None) -> str | 
             parts = [part for part in remainder.split("/") if part]
             directory = "/".join(parts[:-1])
             return f"gdrive:/{directory}" if directory else "gdrive:/"
-
-    if normalized_source == "onedrive" or path.lower().startswith("onedrive:/"):
-        prefix = "onedrive:/"
-        if path.lower().startswith(prefix):
-            remainder = path[len(prefix):].lstrip("/")
-            parts = [part for part in remainder.split("/") if part]
-            directory = "/".join(parts[:-1])
-            return f"onedrive:/{directory}" if directory else "onedrive:/"
 
     return os.path.normpath(os.path.dirname(path))
 
@@ -420,28 +401,6 @@ def index_google_drive(request: GoogleDriveIndexRequest, db: Session = Depends(g
     return IndexResponse(status="started", stats={})
 
 
-@router.post("/index/onedrive", response_model=IndexResponse)
-def index_onedrive(request: OneDriveIndexRequest, db: Session = Depends(get_db)):
-    """Mulai indexing OneDrive (full atau incremental) di background."""
-    if request.folder_id:
-        update_watch_config(
-            db,
-            onedrive_folder_ids=[request.folder_id],
-            onedrive_monitor_all=False,
-        )
-
-    indexer = get_indexer()
-    mode = request.mode.lower().strip()
-    if mode not in {"full", "incremental"}:
-        raise HTTPException(status_code=400, detail="mode harus 'full' atau 'incremental'")
-
-    started = indexer.start_background_onedrive_index(mode=mode, folder_id=request.folder_id)
-    if started:
-        mark_onedrive_index_started(db)
-    if not started:
-        return IndexResponse(status="already_running", stats={})
-    return IndexResponse(status="started", stats={})
-
 
 @router.get("/index/watch-config", response_model=IndexWatchConfigResponse)
 def get_index_watch_config(db: Session = Depends(get_db)):
@@ -459,8 +418,6 @@ def set_index_watch_config(request: IndexWatchConfigRequest, db: Session = Depen
         exclude_directories=request.exclude_directories,
         gdrive_folder_ids=request.gdrive_folder_ids,
         gdrive_monitor_all=request.gdrive_monitor_all,
-        onedrive_folder_ids=request.onedrive_folder_ids,
-        onedrive_monitor_all=request.onedrive_monitor_all,
     )
     return IndexWatchConfigResponse(**payload)
 
@@ -554,87 +511,6 @@ def google_status():
 
 
 # =====================================================================
-# ONEDRIVE OAUTH ENDPOINTS
-# =====================================================================
-@router.get("/auth/onedrive/login", response_model=OneDriveAuthUrlResponse)
-def onedrive_login_url():
-    """Generate URL login Microsoft OneDrive OAuth untuk user."""
-    onedrive = get_onedrive()
-    try:
-        auth_url = onedrive.get_authorization_url()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gagal membuat auth URL OneDrive: {e}")
-    return OneDriveAuthUrlResponse(auth_url=auth_url)
-
-
-@router.get("/auth/onedrive/callback", response_class=HTMLResponse)
-def onedrive_callback(
-    code: str = Query(...),
-    error: str | None = Query(default=None),
-    db: Session = Depends(get_db),
-):
-    """Callback OAuth dari Microsoft setelah user approve consent."""
-    if error:
-        return HTMLResponse(
-            content=f"<h3>OAuth dibatalkan atau gagal</h3><p>{error}</p>",
-            status_code=400,
-        )
-
-    onedrive = get_onedrive()
-    try:
-        result = onedrive.exchange_code(code)
-
-        auto_check_message = "Auto-check OneDrive menunggu jadwal scheduler berikutnya."
-        if settings.AUTO_ONEDRIVE_INCREMENTAL_INDEX_ENABLED:
-            watch_targets = get_effective_watch_targets(db)
-            monitor_all = bool(watch_targets.get("onedrive_monitor_all"))
-            folder_ids = watch_targets.get("onedrive_folder_ids") or []
-
-            if monitor_all or folder_ids:
-                indexer = get_indexer()
-                started = False
-                targets = [None] if monitor_all else folder_ids
-                for folder_id in targets:
-                    started = indexer.start_background_onedrive_index(mode="incremental", folder_id=folder_id)
-                    if started:
-                        mark_onedrive_index_started(db)
-                        break
-
-                if started:
-                    auto_check_message = "Auto-check OneDrive langsung dimulai setelah reconnect."
-                else:
-                    auto_check_message = "Auto-check OneDrive belum dimulai karena proses indexing lain sedang berjalan."
-            else:
-                auto_check_message = "Watch config OneDrive belum diset. Simpan konfigurasi watch dulu di UI."
-
-        return HTMLResponse(
-            content=(
-                "<h3>Microsoft OneDrive berhasil terhubung</h3>"
-                "<p>Anda bisa kembali ke aplikasi Streamlit dan mulai indexing OneDrive.</p>"
-                f"<p>{auto_check_message}</p>"
-                f"<p>Token expiry: {result.get('expiry')}</p>"
-            ),
-            status_code=200,
-        )
-    except Exception as e:
-        return HTMLResponse(
-            content=f"<h3>Gagal memproses callback OAuth OneDrive</h3><p>{e}</p>",
-            status_code=500,
-        )
-
-
-@router.get("/auth/onedrive/status", response_model=OneDriveAuthStatusResponse)
-def onedrive_status():
-    """Cek apakah token OneDrive OAuth sudah tersedia dan valid."""
-    onedrive = get_onedrive()
-    connected = onedrive.is_connected()
-    return OneDriveAuthStatusResponse(
-        connected=connected,
-        token_file=onedrive.token_file if connected else None,
-    )
-
-
-# =====================================================================
 # STATS ENDPOINT
 # =====================================================================
 @router.get("/stats", response_model=StatsResponse)
@@ -645,7 +521,6 @@ def get_stats(db: Session = Depends(get_db)):
 
     local_files = db.query(File).filter((File.source == "local") | (File.source.is_(None))).count()
     gdrive_files = db.query(File).filter(File.source == "gdrive").count()
-    onedrive_files = db.query(File).filter(File.source == "onedrive").count()
 
     watch_config = get_watch_config_payload(db)
     local_directory_stats: dict[str, dict] = {}
@@ -737,13 +612,7 @@ def get_stats(db: Session = Depends(get_db)):
         name for (name,) in db.query(File.file_name).filter(File.source == "gdrive").order_by(File.updated_at.desc()).all()
     ]
 
-    onedrive_paths = db.query(File.file_path).filter(File.source == "onedrive").all()
-    onedrive_roots = sorted(list({(fp.split(":", 1)[0] + ":") for (fp,) in onedrive_paths if fp and ":" in fp}))
-    onedrive_file_names = [
-        name for (name,) in db.query(File.file_name).filter(File.source == "onedrive").order_by(File.updated_at.desc()).all()
-    ]
-
-    directories = local_dirs + gdrive_roots + onedrive_roots
+    directories = local_dirs + gdrive_roots
 
     indexed_local_directory_details = [
         IndexedDirectoryInfo(
@@ -779,20 +648,17 @@ def get_stats(db: Session = Depends(get_db)):
         indexed_directories=directories,
         local_files=local_files,
         gdrive_files=gdrive_files,
-        onedrive_files=onedrive_files,
         indexed_local_directories=local_dirs,
         indexed_gdrive_roots=gdrive_roots,
         indexed_gdrive_files=gdrive_file_names,
         indexed_gdrive_directory_details=indexed_gdrive_directory_details,
-        indexed_onedrive_roots=onedrive_roots,
-        indexed_onedrive_files=onedrive_file_names,
         indexed_local_directory_details=indexed_local_directory_details,
     )
 
 
 @router.get("/index/files", response_model=IndexedFileListResponse)
 def list_indexed_files(
-    source: str | None = Query(default=None, description="Filter source: local, gdrive, onedrive"),
+    source: str | None = Query(default=None, description="Filter source: local, gdrive"),
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),

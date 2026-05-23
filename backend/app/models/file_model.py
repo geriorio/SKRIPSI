@@ -26,7 +26,7 @@ class File(Base):
     id = Column(Integer, primary_key=True, index=True)
     file_name = Column(String(500), nullable=False)
     file_path = Column(String(1000), unique=True, nullable=False)
-    source = Column(String(50), nullable=False, default="local", index=True)  # local | gdrive | onedrive
+    source = Column(String(50), nullable=False, default="local", index=True)  # local | gdrive
     cloud_file_id = Column(String(255), nullable=True, index=True)
     web_view_link = Column(String(1200), nullable=True)
     file_type = Column(String(20), nullable=False)
@@ -88,21 +88,13 @@ class IndexWatchConfig(Base):
     gdrive_folder_ids = Column(Text, nullable=True)             # JSON array string
     gdrive_monitor_all = Column(Boolean, nullable=False, default=False)
 
-    # OneDrive watch settings
-    onedrive_folder_ids = Column(Text, nullable=True)           # JSON array string
-    onedrive_monitor_all = Column(Boolean, nullable=False, default=False)
-
     # Audit timestamps
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_local_index_started_at = Column(DateTime, nullable=True)
     last_gdrive_index_started_at = Column(DateTime, nullable=True)
-    last_onedrive_index_started_at = Column(DateTime, nullable=True)
     last_local_check_at = Column(DateTime, nullable=True)
     last_local_check_has_changes = Column(Boolean, nullable=True)
     last_local_check_stats = Column(Text, nullable=True)        # JSON string
     last_gdrive_check_at = Column(DateTime, nullable=True)
     last_gdrive_check_has_changes = Column(Boolean, nullable=True)
     last_gdrive_check_stats = Column(Text, nullable=True)       # JSON string
-    last_onedrive_check_at = Column(DateTime, nullable=True)
-    last_onedrive_check_has_changes = Column(Boolean, nullable=True)
-    last_onedrive_check_stats = Column(Text, nullable=True)     # JSON string

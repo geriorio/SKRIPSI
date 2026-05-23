@@ -16,7 +16,6 @@ from app.services.watch_config import (
     get_effective_watch_targets,
     mark_local_index_started,
     mark_gdrive_index_started,
-    mark_onedrive_index_started,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,6 +56,13 @@ class AutoIncrementalIndexScheduler:
             interval_minutes,
         )
 
+        # Jalankan sekali 30 detik setelah startup, agar tidak perlu tunggu interval penuh.
+        if not self._stop_event.wait(30):
+            try:
+                self.run_once()
+            except Exception as exc:
+                logger.error("Auto indexing scheduler error (startup run): %s", exc)
+
         while not self._stop_event.wait(interval_seconds):
             try:
                 self.run_once()
@@ -64,16 +70,13 @@ class AutoIncrementalIndexScheduler:
                 logger.error("Auto indexing scheduler error: %s", exc)
 
     def run_once(self) -> bool:
-        """Jalankan satu siklus incremental indexing untuk local, Google Drive, dan OneDrive."""
+        """Jalankan satu siklus incremental indexing untuk local dan Google Drive."""
         ran_anything = False
 
         if self.run_local_once():
             ran_anything = True
 
         if self.run_google_drive_once():
-            ran_anything = True
-
-        if self.run_onedrive_once():
             ran_anything = True
 
         return ran_anything
@@ -159,52 +162,6 @@ class AutoIncrementalIndexScheduler:
                     db.close()
                 break
             logger.info("Auto incremental indexing Google Drive tidak dimulai karena proses lain masih aktif.")
-
-        return started_any
-
-    def run_onedrive_once(self) -> bool:
-        """Jalankan incremental indexing OneDrive bila konfigurasi folder tersedia."""
-        if not settings.AUTO_ONEDRIVE_INCREMENTAL_INDEX_ENABLED:
-            logger.info("Auto incremental indexing OneDrive dinonaktifkan.")
-            return False
-
-        db = SessionLocal()
-        try:
-            watch_targets = get_effective_watch_targets(db)
-        finally:
-            db.close()
-
-        monitor_all = bool(watch_targets.get("onedrive_monitor_all"))
-        folder_ids = watch_targets.get("onedrive_folder_ids") or settings.AUTO_ONEDRIVE_FOLDER_IDS or []
-
-        if not monitor_all and not folder_ids:
-            logger.info("Auto incremental indexing OneDrive dilewati karena folder watch belum diset.")
-            return False
-
-        indexer = get_indexer()
-        if not indexer.onedrive.is_connected():
-            logger.info("Auto incremental indexing OneDrive dilewati karena OAuth belum terhubung.")
-            return False
-
-        progress = indexer.get_progress()
-        if progress.get("running"):
-            logger.info("Auto incremental indexing OneDrive dilewati karena proses indexing lain masih berjalan.")
-            return False
-
-        started_any = False
-        targets = [None] if monitor_all else folder_ids
-        for folder_id in targets:
-            started = indexer.start_background_onedrive_index(mode="incremental", folder_id=folder_id)
-            if started:
-                logger.info("Auto incremental indexing OneDrive dimulai untuk folder_id=%s", folder_id)
-                started_any = True
-                db = SessionLocal()
-                try:
-                    mark_onedrive_index_started(db)
-                finally:
-                    db.close()
-                break
-            logger.info("Auto incremental indexing OneDrive tidak dimulai karena proses lain masih aktif.")
 
         return started_any
 

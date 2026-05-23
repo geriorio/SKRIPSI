@@ -22,13 +22,11 @@ from app.services.crawler import FileCrawler
 from app.services.extractor import TextExtractor
 from app.services.embedder import EmbeddingService
 from app.services.gdrive_service import GoogleDriveService
-from app.services.onedrive_service import OneDriveService
 from app.database import SessionLocal
 from app.config import settings
 from app.services.watch_config import (
     mark_local_check_result,
     mark_gdrive_check_result,
-    mark_onedrive_check_result,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,7 +40,6 @@ class IndexingService:
         self.extractor = TextExtractor()
         self.embedder = EmbeddingService()
         self.gdrive = GoogleDriveService()
-        self.onedrive = OneDriveService()
 
         # Progress tracking
         self._progress: Dict = {
@@ -179,43 +176,6 @@ class IndexingService:
                 self._google_incremental_index_internal(db, folder_id)
         except Exception as e:
             logger.error(f"Background Google indexing error: {e}")
-            self._update_progress(phase="error", error=str(e), running=False)
-        finally:
-            db.close()
-
-    def start_background_onedrive_index(self, mode: str, folder_id: Optional[str] = None) -> bool:
-        """Mulai indexing OneDrive di background thread."""
-        with self._lock:
-            if self._progress["running"]:
-                return False
-            self._progress.update({
-                "running": True,
-                "mode": f"onedrive_{mode}",
-                "phase": "starting",
-                "total_files": 0,
-                "processed_files": 0,
-                "current_file": "",
-                "stats": {},
-                "error": None,
-            })
-
-        thread = threading.Thread(
-            target=self._run_onedrive_index_background,
-            args=(mode, folder_id),
-            daemon=True,
-        )
-        thread.start()
-        return True
-
-    def _run_onedrive_index_background(self, mode: str, folder_id: Optional[str]):
-        db: Session = SessionLocal()
-        try:
-            if mode == "full":
-                self._onedrive_full_index_internal(db, folder_id)
-            else:
-                self._onedrive_incremental_index_internal(db, folder_id)
-        except Exception as e:
-            logger.error(f"Background OneDrive indexing error: {e}")
             self._update_progress(phase="error", error=str(e), running=False)
         finally:
             db.close()
@@ -558,136 +518,6 @@ class IndexingService:
         mark_gdrive_check_result(db, stats)
         self._update_progress(phase="done", processed_files=len(crawled_files), stats=stats, running=False)
         logger.info(f"Google incremental indexing selesai: {stats}")
-        return stats
-
-    # ------------------------------------------------------------------
-    # ONEDRIVE INDEX
-    # ------------------------------------------------------------------
-    def _onedrive_full_index_internal(self, db: Session, folder_id: Optional[str] = None) -> Dict:
-        """Full indexing untuk OneDrive: reset source onedrive lalu index ulang."""
-        stats = {"crawled": 0, "indexed": 0, "skipped": 0, "errors": 0}
-
-        self._update_progress(phase="cleaning")
-        onedrive_ids = [f.id for f in db.query(File.id).filter(File.source == "onedrive").all()]
-        if onedrive_ids:
-            db.query(FileChunk).filter(FileChunk.file_id.in_(onedrive_ids)).delete(synchronize_session=False)
-        db.query(File).filter(File.source == "onedrive").delete(synchronize_session=False)
-        db.commit()
-
-        self._update_progress(phase="crawling")
-        crawled_files = self.onedrive.list_supported_files(folder_id=folder_id)
-        stats["crawled"] = len(crawled_files)
-        self._update_progress(phase="indexing", total_files=len(crawled_files), processed_files=0)
-
-        for i, file_info in enumerate(crawled_files):
-            self._update_progress(processed_files=i, current_file=file_info["file_name"])
-            try:
-                def _index_onedrive_one() -> bool:
-                    self._set_phase("downloading")
-                    file_bytes = self.onedrive.download_file_bytes(file_info["file_id"])
-                    return self._process_cloud_file(file_info, file_bytes, db)
-
-                result = self._run_with_retries(
-                    _index_onedrive_one,
-                    file_label=file_info["file_name"],
-                    stage_label="onedrive_full",
-                )
-                if result:
-                    stats["indexed"] += 1
-                else:
-                    stats["skipped"] += 1
-            except Exception as e:
-                db.rollback()
-                logger.error(f"Error indexing OneDrive file {file_info.get('file_name')}: {e}")
-                stats["errors"] += 1
-
-            if (i + 1) % 5 == 0:
-                db.commit()
-
-        db.commit()
-        self._update_progress(phase="done", processed_files=len(crawled_files), stats=stats, running=False)
-        logger.info(f"OneDrive full indexing selesai: {stats}")
-        return stats
-
-    def _onedrive_incremental_index_internal(self, db: Session, folder_id: Optional[str] = None) -> Dict:
-        """Incremental indexing untuk OneDrive berdasarkan modified time."""
-        stats = {
-            "crawled": 0, "new": 0, "updated": 0,
-            "deleted": 0, "unchanged": 0, "errors": 0,
-        }
-
-        self._update_progress(phase="crawling")
-        crawled_files = self.onedrive.list_supported_files(folder_id=folder_id)
-        stats["crawled"] = len(crawled_files)
-
-        existing_files = {
-            (f.cloud_file_id or ""): f
-            for f in db.query(File).filter(File.source == "onedrive").all()
-        }
-        crawled_ids = set()
-
-        self._update_progress(phase="indexing", total_files=len(crawled_files), processed_files=0)
-
-        for i, file_info in enumerate(crawled_files):
-            cloud_id = file_info["file_id"]
-            crawled_ids.add(cloud_id)
-            self._update_progress(processed_files=i, current_file=file_info["file_name"])
-
-            try:
-                existing = existing_files.get(cloud_id)
-
-                if existing is None:
-                    def _index_new_cloud() -> bool:
-                        self._set_phase("downloading")
-                        file_bytes = self.onedrive.download_file_bytes(cloud_id)
-                        return self._process_cloud_file(file_info, file_bytes, db)
-
-                    result = self._run_with_retries(
-                        _index_new_cloud,
-                        file_label=file_info["file_name"],
-                        stage_label="onedrive_incremental_new",
-                    )
-                    stats["new"] += 1 if result else 0
-                elif existing.last_modified < file_info["last_modified"]:
-                    db.delete(existing)
-                    # Remove from existing_files mapping to avoid later double-delete
-                    try:
-                        existing_files.pop(cloud_id, None)
-                    except Exception:
-                        pass
-                    db.flush()
-
-                    def _index_updated_cloud() -> bool:
-                        self._set_phase("downloading")
-                        file_bytes = self.onedrive.download_file_bytes(cloud_id)
-                        return self._process_cloud_file(file_info, file_bytes, db)
-
-                    self._run_with_retries(
-                        _index_updated_cloud,
-                        file_label=file_info["file_name"],
-                        stage_label="onedrive_incremental_update",
-                    )
-                    stats["updated"] += 1
-                else:
-                    stats["unchanged"] += 1
-
-            except Exception as e:
-                db.rollback()
-                logger.error(f"Error indexing OneDrive file {file_info.get('file_name')}: {e}")
-                stats["errors"] += 1
-
-            if (i + 1) % 5 == 0:
-                db.commit()
-
-        for cloud_id, file_obj in existing_files.items():
-            if cloud_id and cloud_id not in crawled_ids:
-                db.delete(file_obj)
-                stats["deleted"] += 1
-
-        db.commit()
-        mark_onedrive_check_result(db, stats)
-        self._update_progress(phase="done", processed_files=len(crawled_files), stats=stats, running=False)
-        logger.info(f"OneDrive incremental indexing selesai: {stats}")
         return stats
 
     # ------------------------------------------------------------------

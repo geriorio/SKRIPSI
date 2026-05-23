@@ -27,20 +27,12 @@ class GoogleDriveIndexRequest(BaseModel):
     mode: str = "full"  # full | incremental
 
 
-class OneDriveIndexRequest(BaseModel):
-    """Request body untuk endpoint indexing Microsoft OneDrive."""
-    folder_id: Optional[str] = None
-    mode: str = "full"  # full | incremental
-
-
 class IndexWatchConfigRequest(BaseModel):
     """Request body untuk simpan konfigurasi watch indexing."""
     local_directories: Optional[List[str]] = None
     exclude_directories: Optional[List[str]] = None
     gdrive_folder_ids: Optional[List[str]] = None
     gdrive_monitor_all: Optional[bool] = None
-    onedrive_folder_ids: Optional[List[str]] = None
-    onedrive_monitor_all: Optional[bool] = None
 
 
 class SearchRequest(BaseModel):
@@ -165,21 +157,15 @@ class IndexWatchConfigResponse(BaseModel):
     exclude_directories: List[str] = []
     gdrive_folder_ids: List[str] = []
     gdrive_monitor_all: bool = False
-    onedrive_folder_ids: List[str] = []
-    onedrive_monitor_all: bool = False
     updated_at: Optional[str] = None
     last_local_index_started_at: Optional[str] = None
     last_gdrive_index_started_at: Optional[str] = None
-    last_onedrive_index_started_at: Optional[str] = None
     last_local_check_at: Optional[str] = None
     last_local_check_has_changes: Optional[bool] = None
     last_local_check_stats: dict = {}
     last_gdrive_check_at: Optional[str] = None
     last_gdrive_check_has_changes: Optional[bool] = None
     last_gdrive_check_stats: dict = {}
-    last_onedrive_check_at: Optional[str] = None
-    last_onedrive_check_has_changes: Optional[bool] = None
-    last_onedrive_check_stats: dict = {}
 
 
 class IndexedDirectoryInfo(BaseModel):
@@ -198,13 +184,10 @@ class StatsResponse(BaseModel):
     indexed_directories: List[str]
     local_files: int = 0
     gdrive_files: int = 0
-    onedrive_files: int = 0
     indexed_local_directories: List[str] = []
     indexed_gdrive_roots: List[str] = []
     indexed_gdrive_files: List[str] = []
     indexed_gdrive_directory_details: List[IndexedDirectoryInfo] = []
-    indexed_onedrive_roots: List[str] = []
-    indexed_onedrive_files: List[str] = []
     indexed_local_directory_details: List[IndexedDirectoryInfo] = []
 
 
@@ -219,12 +202,3 @@ class GoogleAuthStatusResponse(BaseModel):
     token_file: Optional[str] = None
 
 
-class OneDriveAuthUrlResponse(BaseModel):
-    """Response untuk endpoint URL login OneDrive OAuth."""
-    auth_url: str
-
-
-class OneDriveAuthStatusResponse(BaseModel):
-    """Response untuk status koneksi OneDrive OAuth."""
-    connected: bool
-    token_file: Optional[str] = None

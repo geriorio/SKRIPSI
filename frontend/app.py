@@ -111,8 +111,6 @@ def format_index_root_label(root: str) -> str:
     value = root.strip().lower()
     if value in {"gdrive", "gdrive:"}:
         return "Google Drive (OAuth)"
-    if value in {"onedrive", "onedrive:"}:
-        return "OneDrive (OAuth)"
     return root
 
 
@@ -179,22 +177,15 @@ with st.sidebar:
         gdrive_ids = watch_config.get("gdrive_folder_ids", [])
         st.session_state["watch_gdrive_folder_id"] = gdrive_ids[0] if gdrive_ids else ""
         st.session_state["watch_gdrive_monitor_all"] = bool(watch_config.get("gdrive_monitor_all", False))
-        onedrive_ids = watch_config.get("onedrive_folder_ids", [])
-        st.session_state["watch_onedrive_folder_id"] = onedrive_ids[0] if onedrive_ids else ""
-        st.session_state["watch_onedrive_monitor_all"] = bool(watch_config.get("onedrive_monitor_all", False))
         st.session_state["watch_config_updated_at"] = watch_config.get("updated_at")
         st.session_state["watch_local_last_started"] = watch_config.get("last_local_index_started_at")
         st.session_state["watch_gdrive_last_started"] = watch_config.get("last_gdrive_index_started_at")
-        st.session_state["watch_onedrive_last_started"] = watch_config.get("last_onedrive_index_started_at")
         st.session_state["watch_local_last_check_at"] = watch_config.get("last_local_check_at")
         st.session_state["watch_local_last_check_has_changes"] = watch_config.get("last_local_check_has_changes")
         st.session_state["watch_local_last_check_stats"] = watch_config.get("last_local_check_stats", {})
         st.session_state["watch_gdrive_last_check_at"] = watch_config.get("last_gdrive_check_at")
         st.session_state["watch_gdrive_last_check_has_changes"] = watch_config.get("last_gdrive_check_has_changes")
         st.session_state["watch_gdrive_last_check_stats"] = watch_config.get("last_gdrive_check_stats", {})
-        st.session_state["watch_onedrive_last_check_at"] = watch_config.get("last_onedrive_check_at")
-        st.session_state["watch_onedrive_last_check_has_changes"] = watch_config.get("last_onedrive_check_has_changes")
-        st.session_state["watch_onedrive_last_check_stats"] = watch_config.get("last_onedrive_check_stats", {})
         st.session_state["watch_config_loaded"] = True
 
     if st.session_state.get("watch_config_updated_at"):
@@ -221,16 +212,6 @@ with st.sidebar:
     else:
         st.caption("Cek terakhir GDrive: belum ada data")
 
-    onedrive_check_at = format_timestamp_wib(st.session_state.get("watch_onedrive_last_check_at"))
-    if onedrive_check_at:
-        onedrive_changed = st.session_state.get("watch_onedrive_last_check_has_changes")
-        onedrive_stats = st.session_state.get("watch_onedrive_last_check_stats", {}) or {}
-        onedrive_delta = int(onedrive_stats.get("new", 0)) + int(onedrive_stats.get("updated", 0)) + int(onedrive_stats.get("deleted", 0))
-        onedrive_status = "Ada perubahan" if onedrive_changed else "Tidak ada perubahan"
-        st.caption(f"Cek terakhir OneDrive: {onedrive_check_at} ({onedrive_status}, delta={onedrive_delta})")
-    else:
-        st.caption("Cek terakhir OneDrive: belum ada data")
-
     # --- Statistik ---
     st.subheader("📊 Statistik Database")
     if st.button("🔄 Refresh Stats"):
@@ -242,20 +223,17 @@ with st.sidebar:
         col1.metric("Total File", stats["total_files"])
         col2.metric("Total Chunk", stats["total_chunks"])
 
-        src1, src2, src3 = st.columns(3)
+        src1, src2 = st.columns(2)
         src1.metric("Local Files", stats.get("local_files", 0))
         src2.metric("GDrive Files", stats.get("gdrive_files", 0))
-        src3.metric("OneDrive Files", stats.get("onedrive_files", 0))
 
         local_dirs = stats.get("indexed_local_directories", [])
         local_dir_details = stats.get("indexed_local_directory_details", []) or []
         gdrive_roots = stats.get("indexed_gdrive_roots", [])
         gdrive_files_preview = stats.get("indexed_gdrive_files", [])
         gdrive_dir_details = stats.get("indexed_gdrive_directory_details", []) or []
-        onedrive_roots = stats.get("indexed_onedrive_roots", [])
-        onedrive_files_preview = stats.get("indexed_onedrive_files", [])
 
-        if local_dirs or gdrive_roots or onedrive_roots:
+        if local_dirs or gdrive_roots:
             with st.expander("📁 Direktori ter-index"):
                 if local_dir_details:
                     st.markdown("**Local (ringkasan per direktori)**")
@@ -310,24 +288,6 @@ with st.sidebar:
                     render_scrollable_list(
                         "",
                         [str(file_name) for file_name in gdrive_files_preview],
-                        "",
-                        height_px=220,
-                    )
-
-                st.write("")
-
-                render_scrollable_list(
-                    "OneDrive",
-                    [format_index_root_label(d) for d in onedrive_roots],
-                    "Belum ada index OneDrive",
-                    height_px=180,
-                )
-
-                if onedrive_files_preview:
-                    st.caption(f"File OneDrive yang sudah ter-index ({len(onedrive_files_preview)} file):")
-                    render_scrollable_list(
-                        "",
-                        [str(file_name) for file_name in onedrive_files_preview],
                         "",
                         height_px=220,
                     )
@@ -570,101 +530,6 @@ with st.sidebar:
                             data={
                                 "gdrive_monitor_all": bool(gdrive_monitor_all),
                                 "gdrive_folder_ids": [] if gdrive_monitor_all else ([gdrive_folder_id] if gdrive_folder_id else []),
-                            },
-                            show_error=False,
-                        )
-                        if saved:
-                            st.session_state["watch_config_updated_at"] = saved.get("updated_at")
-                        st.session_state["indexing_active"] = True
-                        st.rerun()
-
-    st.divider()
-
-    # --- OneDrive OAuth + Indexing ---
-    st.subheader("🟦 Microsoft OneDrive")
-
-    ostatus = api_request("auth/onedrive/status", timeout_seconds=90, show_error=False)
-    if ostatus is None:
-        last_connected = st.session_state.get("onedrive_connected_last", False)
-        ostatus = {"connected": last_connected}
-        st.info("Status OneDrive belum dapat diambil (backend sibuk). Menampilkan status terakhir.")
-    else:
-        st.session_state["onedrive_connected_last"] = bool(ostatus.get("connected"))
-
-    if ostatus.get("connected"):
-        st.success("OneDrive terhubung")
-    else:
-        st.warning("OneDrive belum terhubung")
-
-    if st.button("🔐 Connect OneDrive", use_container_width=True):
-        login_data = api_request("auth/onedrive/login")
-        if login_data and login_data.get("auth_url"):
-            st.info("Klik link berikut untuk login dengan akun Microsoft yang diinginkan:")
-            st.markdown(f"[Login OneDrive OAuth]({login_data['auth_url']})")
-
-    onedrive_folder_id = st.text_input(
-        "OneDrive Folder ID (opsional)",
-        key="watch_onedrive_folder_id",
-        placeholder="Kosongkan untuk semua file yang bisa diakses akun",
-        help="Isi jika ingin batasi indexing hanya dalam satu folder tertentu",
-    )
-
-    onedrive_monitor_all = st.checkbox(
-        "Pantau semua file OneDrive yang bisa diakses",
-        key="watch_onedrive_monitor_all",
-    )
-
-    st.caption("Watch OneDrive akan tersimpan otomatis saat menjalankan indexing OneDrive.")
-
-    col_o1, col_o2 = st.columns(2)
-    with col_o1:
-        if st.button("🟦 Full Index OneDrive", use_container_width=True):
-            if not ostatus.get("connected"):
-                st.error("Hubungkan OneDrive dulu lewat tombol Connect.")
-            else:
-                current_folder_id = None if onedrive_monitor_all else (onedrive_folder_id or None)
-                payload = {"folder_id": current_folder_id, "mode": "full"}
-                result = api_request("index/onedrive", method="POST", data=payload)
-                if result:
-                    if result.get("status") == "already_running":
-                        st.warning("⏳ Indexing sedang berjalan. Tunggu hingga selesai.")
-                        st.session_state["indexing_active"] = True
-                        st.rerun()
-                    else:
-                        saved = api_request(
-                            "index/watch-config",
-                            method="POST",
-                            data={
-                                "onedrive_monitor_all": bool(onedrive_monitor_all),
-                                "onedrive_folder_ids": [] if onedrive_monitor_all else ([onedrive_folder_id] if onedrive_folder_id else []),
-                            },
-                            show_error=False,
-                        )
-                        if saved:
-                            st.session_state["watch_config_updated_at"] = saved.get("updated_at")
-                        st.session_state["indexing_active"] = True
-                        st.rerun()
-
-    with col_o2:
-        if st.button("🟦 Incremental OneDrive", use_container_width=True):
-            if not ostatus.get("connected"):
-                st.error("Hubungkan OneDrive dulu lewat tombol Connect.")
-            else:
-                current_folder_id = None if onedrive_monitor_all else (onedrive_folder_id or None)
-                payload = {"folder_id": current_folder_id, "mode": "incremental"}
-                result = api_request("index/onedrive", method="POST", data=payload)
-                if result:
-                    if result.get("status") == "already_running":
-                        st.warning("⏳ Indexing sedang berjalan. Tunggu hingga selesai.")
-                        st.session_state["indexing_active"] = True
-                        st.rerun()
-                    else:
-                        saved = api_request(
-                            "index/watch-config",
-                            method="POST",
-                            data={
-                                "onedrive_monitor_all": bool(onedrive_monitor_all),
-                                "onedrive_folder_ids": [] if onedrive_monitor_all else ([onedrive_folder_id] if onedrive_folder_id else []),
                             },
                             show_error=False,
                         )
