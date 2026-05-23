@@ -495,86 +495,51 @@ class SearchService:
         if file_lookup_mode:
             top_k_chunks = max(top_k_chunks, int(settings.SEARCH_FILE_LOOKUP_TOP_K_CHUNKS or 40))
 
-        focus_terms = self._extract_focus_terms(query) if file_lookup_mode else []
-        gdrive_requested = self._mentions_gdrive(query)
-
-        # 1. Metadata-first lookup untuk query lokasi/nama file.
-        # OLD FLOW (disimpan sebagai referensi):
-        #   1) embed query
-        #   2) semantic chunk search dulu
-        #   3) metadata candidates ditambahkan belakangan
-        # Flow baru: metadata dulu, semantic hanya fallback kalau metadata tidak punya kandidat.
-        metadata_rows: List[SimpleNamespace] = []
+        # Pure semantic: semua query (termasuk file lookup) langsung ke pgvector.
+        # Tidak ada metadata candidate / boosting similarity.
         query_embedding = self.embedder.embed_text(query)
-        if file_lookup_mode:
-            exact_candidates = self._metadata_exact_candidates(
-                db=db,
-                query=query,
-                top_k_files=top_k_files,
-                gdrive_requested=gdrive_requested,
-            )
-            keyword_candidates = self._metadata_search_candidates(
-                db=db,
-                query=query,
-                top_k_files=top_k_files,
-                focus_terms=focus_terms,
-                gdrive_requested=gdrive_requested,
-            )
-            combined_candidates = self._combine_metadata_candidates(exact_candidates, keyword_candidates)
-            if combined_candidates:
-                metadata_rows = self._build_metadata_lookup_rows(
-                    db=db,
-                    candidate_items=combined_candidates,
-                    query=query,
-                    query_embedding=str(query_embedding),
-                )
 
-        if metadata_rows:
-            rows = metadata_rows
-        else:
-            # 2. Siapkan filter path yang di-exclude saat retrieval
-            exclude_keywords = [
-                k.strip().lower()
-                for k in settings.SEARCH_EXCLUDE_PATH_KEYWORDS
-                if k and k.strip()
-            ]
-            exclude_clauses = ""
-            params = {
-                "query_embedding": str(query_embedding),
-                "top_k": top_k_chunks,
-                "include_gdrive": bool(settings.SEARCH_INCLUDE_GDRIVE),
-            }
-            for i, keyword in enumerate(exclude_keywords):
-                key = f"exclude_kw_{i}"
-                exclude_clauses += f"\n              AND LOWER(f.file_path) NOT LIKE :{key}"
-                params[key] = f"%{keyword}%"
+        # Siapkan filter path yang di-exclude saat retrieval
+        exclude_keywords = [
+            k.strip().lower()
+            for k in settings.SEARCH_EXCLUDE_PATH_KEYWORDS
+            if k and k.strip()
+        ]
+        exclude_clauses = ""
+        params = {
+            "query_embedding": str(query_embedding),
+            "top_k": top_k_chunks,
+            "include_gdrive": bool(settings.SEARCH_INCLUDE_GDRIVE),
+        }
+        for i, keyword in enumerate(exclude_keywords):
+            key = f"exclude_kw_{i}"
+            exclude_clauses += f"\n              AND LOWER(f.file_path) NOT LIKE :{key}"
+            params[key] = f"%{keyword}%"
 
-            # 3. Cari chunk paling mirip via pgvector cosine distance
-            #    Gunakan CAST() karena ::vector bentrok dengan SQLAlchemy :param
-            sql = text(f"""
-                SELECT
-                    fc.id          AS chunk_id,
-                    fc.chunk_text,
-                    fc.chunk_index,
-                    f.id            AS file_id,
-                                    f.source,
-                    f.file_name,
-                    f.file_path,
-                    f.file_type,
-                    f.file_size,
-                    f.last_modified,
-                    1 - (fc.embedding <=> CAST(:query_embedding AS vector)) AS similarity
-                FROM file_chunks fc
-                JOIN files f ON fc.file_id = f.id
-                WHERE fc.embedding IS NOT NULL
-                                AND (:include_gdrive OR f.source <> 'gdrive')
-                  {exclude_clauses}
-                ORDER BY fc.embedding <=> CAST(:query_embedding AS vector)
-                LIMIT :top_k
-            """)
+        # Cari chunk paling mirip via pgvector cosine distance
+        sql = text(f"""
+            SELECT
+                fc.id          AS chunk_id,
+                fc.chunk_text,
+                fc.chunk_index,
+                f.id            AS file_id,
+                f.source,
+                f.file_name,
+                f.file_path,
+                f.file_type,
+                f.file_size,
+                f.last_modified,
+                1 - (fc.embedding <=> CAST(:query_embedding AS vector)) AS similarity
+            FROM file_chunks fc
+            JOIN files f ON fc.file_id = f.id
+            WHERE fc.embedding IS NOT NULL
+              AND (:include_gdrive OR f.source <> 'gdrive')
+              {exclude_clauses}
+            ORDER BY fc.embedding <=> CAST(:query_embedding AS vector)
+            LIMIT :top_k
+        """)
 
-            result = db.execute(sql, params)
-            rows = result.fetchall()
+        rows = db.execute(sql, params).fetchall()
 
         # 4. Agregasi per file
         files_dict: Dict[int, Dict] = {}
@@ -654,27 +619,6 @@ class SearchService:
             coverage_bonus = min(len(top3), 3) * 0.01
             keyword_bonus = min(keyword_hits, 3) * 0.02
             rank_score = (0.50 * avg_top3) + (0.50 * max_sim) + coverage_bonus + keyword_bonus
-
-            # Untuk query "cari file", kecocokan nama/path harus lebih dominan
-            # daripada kemiripan semantik isi dokumen.
-            if file_lookup_mode and focus_terms:
-                matched_terms = [t for t in focus_terms if t in metadata_text]
-                match_ratio = len(matched_terms) / max(len(focus_terms), 1)
-
-                phrase = " ".join(focus_terms)
-                exact_phrase = len(focus_terms) >= 2 and phrase in metadata_text
-                rare_token_matched = any(t in metadata_text for t in focus_terms if len(t) >= 5)
-
-                rank_score += match_ratio * float(settings.SEARCH_FILE_LOOKUP_METADATA_BOOST)
-                if exact_phrase:
-                    rank_score += float(settings.SEARCH_FILE_LOOKUP_EXACT_PHRASE_BOOST)
-                if rare_token_matched:
-                    rank_score += float(settings.SEARCH_FILE_LOOKUP_RARE_TOKEN_BOOST)
-
-                min_ratio = float(settings.SEARCH_FILE_LOOKUP_MIN_TOKEN_RATIO)
-                if match_ratio < min_ratio:
-                    miss_ratio = (min_ratio - match_ratio) / max(min_ratio, 1e-6)
-                    rank_score -= miss_ratio * float(settings.SEARCH_FILE_LOOKUP_LOW_MATCH_PENALTY)
 
             file_info["rank_score"] = float(rank_score)
             # Pertahankan kompatibilitas UI lama yang masih membaca max_similarity

@@ -221,8 +221,9 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
         file_lookup_mode=is_lookup,
     )
 
-    grounded_results = rag.rerank_results_by_answer(answer, search_results)
-    grounded_results = grounded_results[: int(settings.TOP_K_FILES or 5)]
+    # Rerank dinonaktifkan di branch semantic agar skor yang tampil
+    # mencerminkan pure SBERT cosine similarity tanpa campur tangan LLM.
+    grounded_results = search_results[: int(settings.TOP_K_FILES or 5)]
 
     response_time_ms = int((time.time() - start_time) * 1000)
 
