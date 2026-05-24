@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     TOP_K_CHUNKS: int = 20      # jumlah chunk teratas yang diambil
     TOP_K_FILES: int = 5        # jumlah file teratas yang dikembalikan
     SEARCH_INCLUDE_GDRIVE: bool = True  # libatkan dokumen Google Drive saat retrieval
-    SEARCH_FILE_LOOKUP_TOP_K_CHUNKS: int = 40
+    SEARCH_FILE_LOOKUP_TOP_K_CHUNKS: int = 20
     SEARCH_FILE_LOOKUP_METADATA_BOOST: float = 0.35
     SEARCH_FILE_LOOKUP_EXACT_PHRASE_BOOST: float = 0.20
     SEARCH_FILE_LOOKUP_RARE_TOKEN_BOOST: float = 0.10

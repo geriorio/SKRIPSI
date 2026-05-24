@@ -261,6 +261,18 @@ class SearchService:
         scored.sort(key=lambda item: item[1], reverse=True)
         return scored[: max(top_k_files * 3, 12)]
 
+    def _strip_lookup_noise(self, query: str) -> str:
+        """Strip kata non-konten dari query lookup sebelum di-embed ke SBERT."""
+        noise_words: Set[str] = {
+            "dimana", "mana", "yang", "itu", "ini", "ada", "di", "ke", "dari",
+            "untuk", "dan", "atau", "file", "dokumen", "folder", "lokasi", "letak",
+            "tolong", "cari", "carikan", "saya", "punya", "ada", "tentang",
+            "menjelaskan", "mengenai", "berisi", "membahas", "jelaskan",
+            "beritahu", "tunjukkan", "apakah", "apa", "bagaimana", "gimana",
+        }
+        tokens = [t for t in self._tokenize(query) if t not in noise_words and len(t) >= 2]
+        return " ".join(tokens) if tokens else query
+
     def _extract_focus_terms(self, query: str) -> List[str]:
         q = (query or "").lower()
         tail = q
@@ -497,7 +509,9 @@ class SearchService:
 
         # Pure semantic: semua query (termasuk file lookup) langsung ke pgvector.
         # Tidak ada metadata candidate / boosting similarity.
-        query_embedding = self.embedder.embed_text(query)
+        # Untuk file lookup, strip kata non-konten sebelum embed agar SBERT lebih fokus.
+        embed_query = self._strip_lookup_noise(query) if file_lookup_mode else query
+        query_embedding = self.embedder.embed_text(embed_query)
 
         # Siapkan filter path yang di-exclude saat retrieval
         exclude_keywords = [
