@@ -93,6 +93,15 @@ class Settings(BaseSettings):
         "software", "licenses", "common7", "msbuild", "vc", "dotnet", "runtime"
     ]
 
+    # --- Hybrid search weights ---
+    # Mode lookup: metadata + BM25 + SBERT
+    HYBRID_LOOKUP_META_WEIGHT: float = 0.35
+    HYBRID_LOOKUP_BM25_WEIGHT: float = 0.35
+    HYBRID_LOOKUP_SBERT_WEIGHT: float = 0.30
+    # Mode semantic: BM25 + SBERT
+    HYBRID_SEMANTIC_BM25_WEIGHT: float = 0.40
+    HYBRID_SEMANTIC_SBERT_WEIGHT: float = 0.60
+
     # --- Cloud indexing ---
     CLOUD_TEMP_DIR: str = ""
 

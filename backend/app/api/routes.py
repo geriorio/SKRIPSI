@@ -215,14 +215,17 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
         _tag_results_provenance(raw_results, "raw")
         search_results = _merge_search_results(search_results, raw_results)
 
+    top_k = int(settings.TOP_K_FILES or 5)
+    top_results = search_results[:top_k]
+
     answer = rag.generate_response(
         request.message,
-        search_results,
+        top_results,
         file_lookup_mode=is_lookup,
     )
 
-    grounded_results = rag.rerank_results_by_answer(answer, search_results)
-    grounded_results = grounded_results[: int(settings.TOP_K_FILES or 5)]
+    grounded_results = rag.rerank_results_by_answer(answer, top_results)
+    grounded_results = grounded_results[:top_k]
 
     response_time_ms = int((time.time() - start_time) * 1000)
 
