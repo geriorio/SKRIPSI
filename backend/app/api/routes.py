@@ -224,8 +224,11 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
         file_lookup_mode=is_lookup,
     )
 
-    grounded_results = rag.rerank_results_by_answer(answer, top_results)
-    grounded_results = grounded_results[:top_k]
+    if is_lookup:
+        grounded_results = top_results
+    else:
+        grounded_results = rag.rerank_results_by_answer(answer, top_results)
+        grounded_results = grounded_results[:top_k]
 
     response_time_ms = int((time.time() - start_time) * 1000)
 

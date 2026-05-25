@@ -119,8 +119,8 @@ Query user: {raw_query}
 
         context = self._build_context(
             search_results,
-            max_results=1 if file_lookup_mode else None,
-            max_chunks=2 if file_lookup_mode else None,
+            max_results=None,
+            max_chunks=5,
         )
         prompt = self._build_prompt(query, context)
 
@@ -211,6 +211,7 @@ Query user: {raw_query}
         """Bangun prompt untuk LLM."""
         return f"""Kamu adalah asisten chatbot pencarian file.
 Tugasmu adalah membantu pengguna menemukan file dan memahami isi dokumen mereka.
+PENTING: Selalu jawab dalam Bahasa Indonesia, apapun bahasa isi dokumen.
 
 INSTRUKSI:
 - Jawab HANYA berdasarkan isi dokumen yang tersedia di bawah ini.
