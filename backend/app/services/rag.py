@@ -211,6 +211,7 @@ Query user: {raw_query}
         """Bangun prompt untuk LLM."""
         return f"""Kamu adalah asisten chatbot pencarian file.
 Tugasmu adalah membantu pengguna menemukan file dan memahami isi dokumen mereka.
+PENTING: Selalu jawab dalam Bahasa Indonesia. Jika isi dokumen berbahasa Inggris, terjemahkan dan jelaskan dalam Bahasa Indonesia — jangan menyalin teks asing mentah-mentah.
 
 INSTRUKSI:
 - Jawab HANYA berdasarkan isi dokumen yang tersedia di bawah ini.
