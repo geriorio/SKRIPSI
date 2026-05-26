@@ -509,10 +509,17 @@ class IndexingService:
             if (i + 1) % 5 == 0:
                 db.commit()
 
-        for cloud_id, file_obj in existing_files.items():
-            if cloud_id and cloud_id not in crawled_ids:
-                db.delete(file_obj)
-                stats["deleted"] += 1
+        if not crawled_ids and existing_files:
+            logger.warning(
+                "Google Drive crawling mengembalikan 0 file padahal DB punya %d entri gdrive. "
+                "Melewati delete phase sebagai safety guard.",
+                len(existing_files),
+            )
+        else:
+            for cloud_id, file_obj in existing_files.items():
+                if cloud_id and cloud_id not in crawled_ids:
+                    db.delete(file_obj)
+                    stats["deleted"] += 1
 
         db.commit()
         mark_gdrive_check_result(db, stats)
