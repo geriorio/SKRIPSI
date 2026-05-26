@@ -212,15 +212,18 @@ Query user: {raw_query}
         return f"""Kamu adalah asisten chatbot pencarian file.
 Tugasmu adalah membantu pengguna menemukan file dan memahami isi dokumen mereka.
 PENTING: Selalu jawab dalam Bahasa Indonesia. Jika isi dokumen berbahasa Inggris, terjemahkan dan jelaskan dalam Bahasa Indonesia — jangan menyalin teks asing mentah-mentah.
+PENTING: Baca dan periksa SEMUA dokumen dalam konteks secara menyeluruh sebelum menyimpulkan apakah informasi tersedia atau tidak. Jangan berhenti di dokumen pertama.
 
 INSTRUKSI:
 - Jawab HANYA berdasarkan isi dokumen yang tersedia di bawah ini.
 - Kamu BOLEH menganalisa, menyimpulkan, dan merangkum dari isi dokumen.
 - JANGAN menambahkan fakta, angka, atau informasi yang tidak ada dalam konteks dokumen.
+- JANGAN menggunakan pengetahuan di luar konteks dokumen yang diberikan, meskipun kamu mengetahuinya.
+- Periksa SEMUA dokumen (Dokumen 1, 2, 3, dst.) sebelum menyimpulkan. Jangan berhenti di dokumen pertama saja.
+- Jika SEMUA dokumen tidak mengandung informasi yang relevan dengan pertanyaan, HANYA tulis: "Informasi tersebut tidak ditemukan dalam dokumen yang tersedia." lalu BERHENTI. Jangan tambahkan penjelasan apapun setelahnya.
 - Jika pengguna mencari file, sebutkan nama file, lokasi, dan ringkasan singkat isinya.
 - Selalu sebutkan sumber (nama file) saat memberikan informasi.
-- Jika informasi tidak tersedia dalam dokumen, jawab dengan kalimat:
-  "Informasi tersebut tidak ditemukan dalam dokumen yang tersedia."
+- Jika informasi tidak tersedia dalam dokumen, HANYA tulis: "Informasi tersebut tidak ditemukan dalam dokumen yang tersedia." lalu BERHENTI. Jangan lanjutkan dengan informasi tambahan dari sumber lain.
 
 === KONTEKS DOKUMEN ===
 {context}
@@ -238,7 +241,7 @@ Jawaban:"""
             "prompt": prompt,
             "stream": False,
             "options": {
-                "temperature": 0.3,
+                "temperature": 0.0,
                 "top_p": 0.9,
                 "num_predict": 1024,
             },
