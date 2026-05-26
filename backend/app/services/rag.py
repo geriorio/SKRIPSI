@@ -125,7 +125,8 @@ Query user: {raw_query}
         prompt = self._build_prompt(query, context)
 
         try:
-            return self._call_ollama(prompt)
+            answer = self._call_ollama(prompt)
+            return self._strip_trailing_not_found(answer)
         except requests.ConnectionError:
             logger.error("Tidak dapat terhubung ke Ollama. Pastikan Ollama berjalan.")
             return (
@@ -211,16 +212,20 @@ Query user: {raw_query}
         """Bangun prompt untuk LLM."""
         return f"""Kamu adalah asisten chatbot pencarian file.
 Tugasmu adalah membantu pengguna menemukan file dan memahami isi dokumen mereka.
-PENTING: Selalu jawab dalam Bahasa Indonesia, apapun bahasa isi dokumen.
+PENTING: Selalu jawab dalam Bahasa Indonesia. Jika isi dokumen berbahasa Inggris, terjemahkan dan jelaskan dalam Bahasa Indonesia — jangan menyalin teks asing mentah-mentah.
+PENTING: Baca dan periksa SEMUA dokumen dalam konteks secara menyeluruh sebelum menyimpulkan apakah informasi tersedia atau tidak. Jangan berhenti di dokumen pertama.
 
 INSTRUKSI:
 - Jawab HANYA berdasarkan isi dokumen yang tersedia di bawah ini.
 - Kamu BOLEH menganalisa, menyimpulkan, dan merangkum dari isi dokumen.
 - JANGAN menambahkan fakta, angka, atau informasi yang tidak ada dalam konteks dokumen.
+- JANGAN menggunakan pengetahuan di luar konteks dokumen yang diberikan, meskipun kamu mengetahuinya.
+- Periksa SEMUA dokumen (Dokumen 1, 2, 3, dst.) sebelum menyimpulkan. Jangan berhenti di dokumen pertama saja.
+- Gunakan informasi teks yang ada meskipun kalimat terpotong di tengah atau chunk mereferensikan gambar/diagram yang tidak tersedia. Teks yang ada tetap valid untuk dijadikan jawaban.
 - Jika pengguna mencari file, sebutkan nama file, lokasi, dan ringkasan singkat isinya.
 - Selalu sebutkan sumber (nama file) saat memberikan informasi.
-- Jika informasi tidak tersedia dalam dokumen, jawab dengan kalimat:
-  "Informasi tersebut tidak ditemukan dalam dokumen yang tersedia."
+- Jika sudah memberikan jawaban, JANGAN tambahkan kalimat "Informasi tersebut tidak ditemukan" di akhir jawaban.
+- Jika SEMUA dokumen benar-benar tidak mengandung informasi yang relevan, HANYA tulis: "Informasi tersebut tidak ditemukan dalam dokumen yang tersedia." lalu BERHENTI.
 
 === KONTEKS DOKUMEN ===
 {context}
@@ -238,7 +243,7 @@ Jawaban:"""
             "prompt": prompt,
             "stream": False,
             "options": {
-                "temperature": 0.3,
+                "temperature": 0.0,
                 "top_p": 0.9,
                 "num_predict": 1024,
             },
@@ -312,6 +317,16 @@ Jawaban:"""
             "intent": intent,
             "used_llm": False,
         }
+
+    def _strip_trailing_not_found(self, answer: str) -> str:
+        """Hapus kalimat 'tidak ditemukan' di akhir jawaban jika jawaban sudah ada isinya."""
+        NOT_FOUND = "Informasi tersebut tidak ditemukan dalam dokumen yang tersedia."
+        stripped = answer.strip()
+        if stripped.endswith(NOT_FOUND):
+            candidate = stripped[: -len(NOT_FOUND)].strip()
+            if candidate:
+                return candidate
+        return stripped
 
     def _tokenize(self, text: str) -> set[str]:
         """Tokenisasi sederhana untuk scoring dukungan jawaban."""
