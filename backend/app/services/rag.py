@@ -125,7 +125,8 @@ Query user: {raw_query}
         prompt = self._build_prompt(query, context)
 
         try:
-            return self._call_ollama(prompt)
+            answer = self._call_ollama(prompt)
+            return self._strip_trailing_not_found(answer)
         except requests.ConnectionError:
             logger.error("Tidak dapat terhubung ke Ollama. Pastikan Ollama berjalan.")
             return (
@@ -220,10 +221,11 @@ INSTRUKSI:
 - JANGAN menambahkan fakta, angka, atau informasi yang tidak ada dalam konteks dokumen.
 - JANGAN menggunakan pengetahuan di luar konteks dokumen yang diberikan, meskipun kamu mengetahuinya.
 - Periksa SEMUA dokumen (Dokumen 1, 2, 3, dst.) sebelum menyimpulkan. Jangan berhenti di dokumen pertama saja.
-- Jika SEMUA dokumen tidak mengandung informasi yang relevan dengan pertanyaan, HANYA tulis: "Informasi tersebut tidak ditemukan dalam dokumen yang tersedia." lalu BERHENTI. Jangan tambahkan penjelasan apapun setelahnya.
+- Gunakan informasi teks yang ada meskipun kalimat terpotong di tengah atau chunk mereferensikan gambar/diagram yang tidak tersedia. Teks yang ada tetap valid untuk dijadikan jawaban.
 - Jika pengguna mencari file, sebutkan nama file, lokasi, dan ringkasan singkat isinya.
 - Selalu sebutkan sumber (nama file) saat memberikan informasi.
-- Jika informasi tidak tersedia dalam dokumen, HANYA tulis: "Informasi tersebut tidak ditemukan dalam dokumen yang tersedia." lalu BERHENTI. Jangan lanjutkan dengan informasi tambahan dari sumber lain.
+- Jika sudah memberikan jawaban, JANGAN tambahkan kalimat "Informasi tersebut tidak ditemukan" di akhir jawaban.
+- Jika SEMUA dokumen benar-benar tidak mengandung informasi yang relevan, HANYA tulis: "Informasi tersebut tidak ditemukan dalam dokumen yang tersedia." lalu BERHENTI.
 
 === KONTEKS DOKUMEN ===
 {context}
@@ -315,6 +317,16 @@ Jawaban:"""
             "intent": intent,
             "used_llm": False,
         }
+
+    def _strip_trailing_not_found(self, answer: str) -> str:
+        """Hapus kalimat 'tidak ditemukan' di akhir jawaban jika jawaban sudah ada isinya."""
+        NOT_FOUND = "Informasi tersebut tidak ditemukan dalam dokumen yang tersedia."
+        stripped = answer.strip()
+        if stripped.endswith(NOT_FOUND):
+            candidate = stripped[: -len(NOT_FOUND)].strip()
+            if candidate:
+                return candidate
+        return stripped
 
     def _tokenize(self, text: str) -> set[str]:
         """Tokenisasi sederhana untuk scoring dukungan jawaban."""
