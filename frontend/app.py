@@ -557,6 +557,37 @@ with st.sidebar:
 st.title("🔍 Chatbot Pencarian File")
 st.caption("Cari file dan tanyakan isi dokumen Anda menggunakan AI")
 
+# Tombol history & hapus chat
+_hcol1, _hcol2, _ = st.columns([1.5, 1.5, 7])
+with _hcol1:
+    if st.button("📜 Muat History", use_container_width=True):
+        history_data = api_request("history?limit=20")
+        if history_data:
+            loaded = []
+            for h in history_data:
+                loaded.append({"role": "user", "content": h["user_message"]})
+                files = []
+                rf = h.get("retrieved_files")
+                if rf:
+                    try:
+                        files = json.loads(rf) if isinstance(rf, str) else rf
+                    except Exception:
+                        files = []
+                loaded.append({
+                    "role": "assistant",
+                    "content": h["bot_response"] or "",
+                    "files": files,
+                    "response_time_ms": h.get("response_time_ms", 0),
+                })
+            st.session_state.messages = loaded
+            st.rerun()
+        else:
+            st.info("Belum ada history atau backend tidak dapat diakses.")
+with _hcol2:
+    if st.button("🗑️ Hapus Chat", use_container_width=True):
+        st.session_state.messages = []
+        st.rerun()
+
 # Inisialisasi chat history di session state
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -571,9 +602,9 @@ for msg in st.session_state.messages:
             if msg["files"]:
                 with st.expander(f"📎 {len(msg['files'])} file ditemukan", expanded=False):
                     for f in msg["files"]:
-                        icon = get_file_icon(f["file_type"])
-                        size = format_file_size(f["file_size"])
-                        sim = f["max_similarity"]
+                        icon = get_file_icon(f.get("file_type", ""))
+                        size = format_file_size(f.get("file_size") or 0)
+                        sim = f.get("max_similarity") or 0.0
                         chunk_sims = sorted(
                             [c.get("similarity", 0.0) for c in f.get("relevant_chunks", [])],
                             reverse=True,
@@ -592,9 +623,9 @@ for msg in st.session_state.messages:
                         meta_compact = f.get("metadata_compact_match")
                         meta_phrase = f.get("metadata_phrase_match")
                         st.markdown(
-                            f"{icon} **{f['file_name']}** "
+                            f"{icon} **{f.get('file_name', '-')}** "
                             f"(`{sim:.4f}` relevance score)\n"
-                            f"📁 `{f['file_path']}`  •  {size}\n"
+                            f"📁 `{f.get('file_path', '-')}`  •  {size}\n"
                             f"avg_top3: `{avg_top3:.4f}`  •  max_sim: `{max_sim:.4f}`"
                         )
                         if meta_score is not None:
