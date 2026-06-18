@@ -75,6 +75,8 @@ class AutoIncrementalIndexScheduler:
 
         if self.run_local_once():
             ran_anything = True
+            # Tunggu 10 menit setelah local selesai agar tidak tabrakan dengan GDrive
+            self._stop_event.wait(600)
 
         if self.run_google_drive_once():
             ran_anything = True

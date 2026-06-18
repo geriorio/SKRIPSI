@@ -339,9 +339,7 @@ def search(request: SearchRequest, db: Session = Depends(get_db)):
         total_results=len(retrieved_files),
         response_time_ms=response_time_ms,
     )
-# =====================================================================
 # INDEXING ENDPOINTS (Background)
-# =====================================================================
 @router.post("/index", response_model=IndexResponse)
 def index_files(request: IndexRequest, db: Session = Depends(get_db)):
     """Full indexing: mulai background task, hapus data lama → index ulang."""

@@ -332,8 +332,8 @@ class GoogleDriveService:
         else:
             req = service.files().get_media(fileId=file_id)
 
-        stream = io.BytesIO()
-        downloader = MediaIoBaseDownload(stream, req)
+        stream = io.BytesIO() #file ditampilkan di memory, tidak disimpan di disk
+        downloader = MediaIoBaseDownload(stream, req) 
 
         done = False
         while not done:

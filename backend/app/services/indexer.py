@@ -124,7 +124,7 @@ class IndexingService:
         thread = threading.Thread(
             target=self._run_index_background,
             args=(mode, directories),
-            daemon=True,
+            daemon=True, #mati kalau backend ditutup
         )
         thread.start()
         return True
@@ -419,10 +419,10 @@ class IndexingService:
 
         self._update_progress(phase="crawling")
         crawled_files = self.gdrive.list_supported_files(folder_id=folder_id)
-        stats["crawled"] = len(crawled_files)
+        stats["crawled"] = len(crawled_files) 
 
         existing_files = {
-            (f.cloud_file_id or ""): f
+            (f.cloud_file_id or ""): f #biar ga crash kalau ada file dengan cloud_file_id null
             for f in db.query(File).filter(File.source == "gdrive").all()
         }
         crawled_ids = set()
@@ -559,7 +559,7 @@ class IndexingService:
             content_hash=content_hash,
         )
         db.add(file_record)
-        db.flush()  # dapatkan ID
+        db.flush()  # dapatkan ID di postgre
 
         # 4. Chunk + embed (jika ada konten teks)
         if content:
@@ -621,7 +621,7 @@ class IndexingService:
         batch_size = max(1, int(settings.EMBEDDING_BATCH_SIZE or 16))
 
         for start in range(0, len(chunks), batch_size):
-            chunk_batch = chunks[start:start + batch_size]
+            chunk_batch = chunks[start:start + batch_size] #batch 8
             embeddings = self.embedder.embed_texts(chunk_batch, batch_size=batch_size)
 
             for offset, (chunk_text, embedding) in enumerate(zip(chunk_batch, embeddings)):

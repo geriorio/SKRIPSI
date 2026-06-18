@@ -1,13 +1,3 @@
-"""
-Streamlit Frontend — Chatbot Pencarian File
-
-UI chatbot yang terhubung ke FastAPI backend.
-Fitur:
-  - Chat interface untuk pencarian file
-  - Sidebar untuk konfigurasi & indexing
-  - Tampilan file yang ditemukan dengan detail
-"""
-
 import streamlit as st
 import requests
 import json
@@ -16,9 +6,7 @@ import os
 import re
 from datetime import datetime, timezone, timedelta
 
-# =====================================================================
 # KONFIGURASI
-# =====================================================================
 API_BASE_URL = "http://localhost:8001/api"
 
 st.set_page_config(
@@ -29,9 +17,7 @@ st.set_page_config(
 )
 
 
-# =====================================================================
 # HELPER FUNCTIONS
-# =====================================================================
 def format_file_size(size_bytes: int) -> str:
     if size_bytes < 1024:
         return f"{size_bytes} B"
@@ -164,9 +150,7 @@ def render_scrollable_list(title: str, items: list[str], empty_text: str, height
     )
 
 
-# =====================================================================
 # SIDEBAR — Konfigurasi & Indexing
-# =====================================================================
 with st.sidebar:
     st.title("⚙️ Konfigurasi")
 
@@ -459,7 +443,7 @@ with st.sidebar:
     if gstatus.get("connected"):
         st.success("Google Drive terhubung")
     else:
-        st.warning("Google Drive belum terhubung")
+        st.warning("Google Drive belum terhubung")  
 
     if st.button("🔐 Connect Google Drive", use_container_width=True):
         login_data = api_request("auth/google/login")
@@ -551,9 +535,7 @@ with st.sidebar:
     """)
 
 
-# =====================================================================
 # MAIN — Chat Interface
-# =====================================================================
 st.title("🔍 Chatbot Pencarian File")
 st.caption("Cari file dan tanyakan isi dokumen Anda menggunakan AI")
 
@@ -645,17 +627,9 @@ for msg in st.session_state.messages:
                         if chunks_hist:
                             st.caption(f"📝 {len(chunks_hist)} bagian relevan:")
                             for c in chunks_hist:
-                                raw_sim = c.get("raw_similarity")
-                                boosted_sim = c.get("boosted_similarity")
-                                sim_label = f"{c['similarity']:.4f}"
-                                if raw_sim is not None or boosted_sim is not None:
-                                    raw_val = raw_sim if raw_sim is not None else c["similarity"]
-                                    boosted_val = boosted_sim if boosted_sim is not None else c["similarity"]
-                                    sim_label = f"raw: {raw_val:.4f} | boosted: {boosted_val:.4f}"
-                                prov = c.get("provenance")
-                                prov_label = f" [{prov}]" if prov else ""
+                                sim_label = f"{c.get('similarity', 0.0):.4f}"
                                 st.code(
-                                    f"[Chunk {c['chunk_index']}] (sim: {sim_label}){prov_label}\n"
+                                    f"[Chunk {c['chunk_index']}] (sim: {sim_label})\n"
                                     f"{c['chunk_text'][:300]}...",
                                     language=None,
                                 )
@@ -736,17 +710,9 @@ if prompt := st.chat_input("Tanyakan sesuatu... (cth: 'cari file laporan bulanan
                         if chunks:
                             st.caption(f"📝 {len(chunks)} bagian relevan:")
                             for c in chunks:
-                                raw_sim = c.get("raw_similarity")
-                                boosted_sim = c.get("boosted_similarity")
-                                sim_label = f"{c['similarity']:.4f}"
-                                if raw_sim is not None or boosted_sim is not None:
-                                    raw_val = raw_sim if raw_sim is not None else c["similarity"]
-                                    boosted_val = boosted_sim if boosted_sim is not None else c["similarity"]
-                                    sim_label = f"raw: {raw_val:.4f} | boosted: {boosted_val:.4f}"
-                                prov = c.get("provenance")
-                                prov_label = f" [{prov}]" if prov else ""
+                                sim_label = f"{c.get('similarity', 0.0):.4f}"
                                 st.code(
-                                    f"[Chunk {c['chunk_index']}] (sim: {sim_label}){prov_label}\n"
+                                    f"[Chunk {c['chunk_index']}] (sim: {sim_label})\n"
                                     f"{c['chunk_text'][:300]}...",
                                     language=None,
                                 )

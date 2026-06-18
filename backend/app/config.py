@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     EXCLUDE_DIRECTORIES: List[str] = []
     AUTO_INCREMENTAL_INDEX_ENABLED: bool = True
     AUTO_INCREMENTAL_INDEX_INTERVAL_MINUTES: int = 60
-    AUTO_GDRIVE_INCREMENTAL_INDEX_ENABLED: bool = False
+    AUTO_GDRIVE_INCREMENTAL_INDEX_ENABLED: bool = True
     AUTO_GDRIVE_FOLDER_IDS: List[str] = []
     SUPPORTED_EXTENSIONS: List[str] = [
         ".pdf", ".docx", ".xlsx", ".csv", ".ppt", ".pptx", ".txt"

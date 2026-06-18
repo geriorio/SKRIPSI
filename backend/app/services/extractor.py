@@ -140,7 +140,7 @@ class TextExtractor:
         try:
             text = self.extract(tmp_path, file_type)
             return self._sanitize_text(text)
-        finally:
+        finally: #selalu dijalankan meskipun ada error, untuk hapus temp file
             try:
                 os.remove(tmp_path)
             except OSError:
