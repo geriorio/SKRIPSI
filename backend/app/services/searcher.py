@@ -36,11 +36,11 @@ class SearchService:
         self._bm25_lock = threading.Lock()
 
     @staticmethod
-    def _tokenize(text: str) -> List[str]:
+    def _tokenize(text: str) -> List[str]: #jadi list kata
         return re.findall(r"\w+", (text or "").lower())
 
     @staticmethod
-    def _normalize_compact(text: str) -> str:
+    def _normalize_compact(text: str) -> str: #hapus karakter dan angka
         return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
 
     def _compute_metadata_debug(
@@ -172,12 +172,16 @@ class SearchService:
         gdrive_requested: bool,
     ) -> List[tuple[int, int]]:
         """Cari kandidat soft match di metadata nama/path file."""
+        # Query terlalu pendek tidak bisa diandalkan untuk mencocokkan nama file
         q = (query or "").strip().lower()
         if len(q) < 3:
             return []
 
+        # q_compact: query tanpa spasi dan karakter non-alfanumerik, untuk mencocokkan nama file yang pakai strip/titik/dll
         q_compact = self._normalize_compact(q)
+        # Pecah query jadi token kata, minimal 2 huruf
         tokens = [t for t in self._tokenize(q) if len(t) >= 2]
+        # Buang kata-kata umum yang tidak mencerminkan nama file spesifik
         query_terms = [t for t in tokens if t not in {
             "dimana", "mana", "yang", "itu", "ini", "ada", "di", "ke", "dari",
             "untuk", "dan", "atau", "file", "dokumen", "folder", "lokasi", "letak",
@@ -186,21 +190,24 @@ class SearchService:
         if not query_terms:
             query_terms = tokens
 
+        # Ambil semua file dari database, akan dibandingkan satu per satu dengan query
         base_query = db.query(File.id, File.file_name, File.file_path, File.source)
 
         scored: List[tuple[int, int]] = []
         for file_id, file_name, file_path, _source in base_query.all():
             name = (file_name or "").lower()
             path = (file_path or "").lower()
+            # Versi compact dari nama dan path file untuk fuzzy matching tanpa pemisah
             name_compact = self._normalize_compact(name)
             path_compact = self._normalize_compact(path)
+            # Gabungkan nama dan path jadi satu teks untuk pencarian sekaligus
             metadata_text = f"{name} {path}"
             metadata_tokens = [t for t in self._tokenize(metadata_text) if len(t) >= 3]
             metadata_compact = f"{name_compact} {path_compact}"
 
             score = 0
 
-            # OLD EXACT FLOW (disimpan sebagai referensi):
+            # OLD EXACT FLOW (referensi):
             # if q == name or q == path:
             #     score += 120
             # if q in name:
@@ -215,22 +222,23 @@ class SearchService:
             # token_hits_path = sum(1 for t in tokens if t in path)
             # score += (token_hits_name * 6) + (token_hits_path * 3)
 
-            # Soft / fuzzy matching:
-            # - token overlap untuk query yang ingat sebagian nama file
-            # - contains match untuk kata kunci yang kebetulan muncul di nama/path
-            # - fuzzy ratio untuk typo atau nama yang mirip
+            # Setiap kata dari query dicek ke nama/path file dengan 3 tingkat kecocokan:
+            # exact = kata persis ada di metadata, partial = sebagian cocok, fuzzy = mirip meski typo
             exact_term_hits = 0
             partial_term_hits = 0
             fuzzy_term_hits = 0
             for term in query_terms:
+                # Tingkat 1: kata query persis ada di nama atau path file
                 if term in metadata_text:
                     exact_term_hits += 1
                     continue
 
+                # Tingkat 2: kata query adalah bagian dari kata di metadata, atau sebaliknya
                 if any(term in meta_term or meta_term in term for meta_term in metadata_tokens):
                     partial_term_hits += 1
                     continue
 
+                # Tingkat 3: cek kemiripan karakter, toleransi typo (threshold 0.82)
                 best_ratio = 0.0
                 for meta_term in metadata_tokens:
                     ratio = SequenceMatcher(None, term, meta_term).ratio()
@@ -239,30 +247,37 @@ class SearchService:
                 if best_ratio >= 0.82:
                     fuzzy_term_hits += 1
 
+            # Bobot: exact lebih tinggi karena paling akurat
             score += exact_term_hits * 12
             score += partial_term_hits * 9
             score += fuzzy_term_hits * 6
 
+            # Tambahan skor dari kemiripan keseluruhan query vs nama/path file (SequenceMatcher 0-1)
             name_ratio = SequenceMatcher(None, q_compact, name_compact).ratio() if q_compact and name_compact else 0.0
             path_ratio = SequenceMatcher(None, q_compact, path_compact).ratio() if q_compact and path_compact else 0.0
             metadata_ratio = SequenceMatcher(None, q_compact, self._normalize_compact(metadata_text)).ratio() if q_compact else 0.0
             score += int(max(name_ratio * 35, path_ratio * 25, metadata_ratio * 20))
 
+            # (presentase kecocokan) Tambahan skor dari proporsi kata query yang cocok ke metadata
             if query_terms:
                 overlap = sum(1 for term in query_terms if term in metadata_text or any(term in meta_term or meta_term in term for meta_term in metadata_tokens))
                 score += int((overlap / max(len(query_terms), 1)) * 30)
 
+            # (cek misal ada yang terpisah _) Bonus kalau seluruh query compact ada di dalam metadata compact
             if q_compact and q_compact in metadata_compact:
                 score += 20
 
+            # Bonus kalau beberapa kata query muncul berurutan di metadata
             if len(query_terms) >= 2:
                 query_phrase = " ".join(query_terms)
                 if query_phrase in metadata_text:
                     score += 12
 
+            # Hanya simpan file yang punya skor lebih dari 0
             if score > 0:
                 scored.append((file_id, score))
 
+        # Urutkan dari skor tertinggi, ambil maksimal 3x top_k_files atau minimal 12
         scored.sort(key=lambda item: item[1], reverse=True)
         return scored[: max(top_k_files * 3, 12)]
 
@@ -305,27 +320,36 @@ class SearchService:
         gdrive_requested: bool,
     ) -> List[tuple[int, int]]:
         """Cari kandidat file dari metadata nama/path agar file spesifik tidak tenggelam."""
+        # focus_terms adalah kata kunci inti dari query, sudah dibuang stopword-nya
+        # Kalau kosong, tidak ada yang bisa dicocokkan ke nama/path file
         if not focus_terms:
             return []
 
+        # Ambil semua file dari database
         base_query = db.query(File.id, File.file_name, File.file_path, File.source)
 
         scored_candidates: List[tuple[int, int]] = []
         for file_id, file_name, file_path, source in base_query.all():
+            # Gabungkan nama file dan path jadi satu teks untuk pencocokan
             metadata_text = f"{file_name or ''} {file_path or ''}".lower()
+            # Hitung berapa kata dari focus_terms yang muncul di metadata file ini
             matched = sum(1 for term in focus_terms if term in metadata_text)
+            # File yang tidak mengandung satu pun kata dari focus_terms dilewati
             if matched == 0:
                 continue
 
             name_text = (file_name or "").lower()
             path_text = (file_path or "").lower()
+            # Bonus jika kata kunci ada di nama file (lebih spesifik dari path)
             if any(term in name_text for term in focus_terms):
                 matched += 2
+            # Bonus lebih kecil jika ada di path saja
             if any(term in path_text for term in focus_terms):
                 matched += 1
 
             scored_candidates.append((file_id, matched))
 
+        # Urutkan dari yang paling banyak cocoknya, ambil maksimal 3x top_k_files atau minimal 12
         scored_candidates.sort(key=lambda item: item[1], reverse=True)
         return scored_candidates[: max(top_k_files * 3, 12)]
 
@@ -335,12 +359,20 @@ class SearchService:
         keyword_candidates: List[tuple[int, int]],
     ) -> List[tuple[int, int]]:
         """Gabungkan kandidat exact + keyword metadata sambil menjaga skor tertinggi per file."""
+        # combined adalah dict: kunci = file_id, nilai = skor tertinggi yang pernah didapat file itu
         combined: Dict[int, int] = {}
+        # Masukkan semua file dari exact_candidates
         for file_id, score in exact_candidates or []:
+            # Kalau file belum ada di combined, get() return 0 lalu diisi skor ini
+            # Kalau sudah ada, ambil yang lebih tinggi antara skor lama dan skor baru
+            # kalau beririsan ambil skor tertinggi, kalau tidak ada, masukkan
             combined[file_id] = max(combined.get(file_id, 0), int(score))
+        # Masukkan semua file dari keyword_candidates dengan cara yang sama
         for file_id, score in keyword_candidates or []:
+            # File yang muncul di keduanya hanya menyimpan skor tertinggi, tidak dijumlah
             combined[file_id] = max(combined.get(file_id, 0), int(score))
 
+        # Urutkan hasil gabungan dari skor tertinggi ke terendah
         ordered = sorted(combined.items(), key=lambda item: item[1], reverse=True)
         return ordered
 
@@ -535,29 +567,41 @@ class SearchService:
 
     def _retrieve_bm25_chunks(self, query: str, db: Session, top_k: int) -> List[Dict]:
         """Retrieve top-K chunk via BM25, kembalikan dengan skor ternormalisasi 0-1."""
+        # Query kosong tidak bisa dihitung skor BM25-nya, langsung return kosong
         if not query.strip():
             return []
         try:
+            # Ambil BM25 index dari cache (atau bangun ulang kalau belum ada)
+            # Hasilnya: bm25 = objek BM25Okapi, chunk_data = list dict tiap chunk
             bm25, chunk_data, _ = self._get_bm25_index(db)
         except Exception as exc:
             logger.error("BM25 index error: %s", exc)
             return []
 
+        # Pecah query jadi token kata, BM25 bekerja di level kata bukan kalimat
         tokens = self._tokenize(query)
         if not tokens:
             return []
 
+        # Hitung skor BM25 untuk setiap chunk terhadap token query
+        # Hasilnya array angka, satu angka per chunk, urutan sesuai chunk_data
         scores = bm25.get_scores(tokens)
+        # Ambil skor tertinggi sebagai pembagi normalisasi
         max_score = float(max(scores)) if len(scores) > 0 else 0.0
+        # Kalau semua skor 0, artinya tidak ada chunk yang relevan sama sekali
         if max_score <= 0:
             return []
 
+        # Urutkan indeks chunk dari skor tertinggi ke terendah, ambil top_k teratas
         top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
         results = []
         for idx in top_indices:
+            # Berhenti kalau skor sudah 0, chunk sisanya pasti lebih rendah
             if scores[idx] <= 0:
                 break
             c = chunk_data[idx]
+            # Simpan skor asli (bm25_score) dan skor ternormalisasi 0-1 (bm25_score_norm)
+            # Normalisasi: skor chunk dibagi skor tertinggi, agar skala sama dengan SBERT
             results.append({**c, "bm25_score": float(scores[idx]), "bm25_score_norm": float(scores[idx] / max_score)})
         return results
 
@@ -566,19 +610,30 @@ class SearchService:
     # ------------------------------------------------------------------
     def _retrieve_sbert_chunks(self, query: str, db: Session, top_k: int) -> List:
         """Retrieve top-K chunk via pgvector cosine similarity."""
+        # Ubah teks query menjadi vektor 512 dimensi menggunakan model SBERT
         query_embedding = self.embedder.embed_text(query)
+
+        # Daftar kata yang kalau ada di path file maka file itu dilewati, misal "software", "dotnet"
         exclude_keywords = [k.strip().lower() for k in settings.SEARCH_EXCLUDE_PATH_KEYWORDS if k and k.strip()]
         exclude_clauses = ""
+
+        # Siapkan parameter untuk query SQL, termasuk vektor query dan jumlah hasil yang diminta
         params = {
             "query_embedding": str(query_embedding),
             "top_k": top_k,
             "include_gdrive": bool(settings.SEARCH_INCLUDE_GDRIVE),
         }
+
+        # Bangun klausa SQL tambahan untuk setiap kata yang ingin dikecualikan dari path
         for i, kw in enumerate(exclude_keywords):
             key = f"exclude_kw_{i}"
             exclude_clauses += f"\n  AND LOWER(f.file_path) NOT LIKE :{key}"
             params[key] = f"%{kw}%"
 
+        # Query ke PostgreSQL menggunakan pgvector
+        # "fc.embedding <=> query_embedding" menghitung jarak kosinus antar dua vektor
+        # "1 - jarak" dibalik jadi similarity: semakin kecil jaraknya, semakin tinggi skornya
+        # Hasilnya diurutkan dari chunk yang paling mirip maknanya dengan query
         sql = text(f"""
             SELECT fc.id AS chunk_id, fc.chunk_text, fc.chunk_index,
                    f.id AS file_id, f.source, f.file_name, f.file_path,
@@ -599,13 +654,24 @@ class SearchService:
     # ------------------------------------------------------------------
     def _get_metadata_candidates(self, query: str, db: Session, top_k_files: int) -> Dict[int, float]:
         """Ambil kandidat file dari metadata, normalisasi skor ke 0-1."""
+        # Ekstrak kata kunci inti dari query, buang kata umum seperti "cari", "file", "dimana"
         focus_terms = self._extract_focus_terms(query)
+
+        # (tidak dipakai) Cek apakah user menyebut Google Drive dalam querynya
         gdrive_requested = self._mentions_gdrive(query)
+
+        # Cari kandidat file yang nama atau path-nya cocok dengan query secara fuzzy
         exact_cands = self._metadata_exact_candidates(db, query, top_k_files, gdrive_requested)
+
+        # Cari kandidat file berdasarkan kata kunci inti yang diekstrak tadi
         kw_cands = self._metadata_search_candidates(db, query, top_k_files, focus_terms, gdrive_requested)
+
+        # Gabungkan kedua hasil, ambil skor tertinggi per file kalau file muncul di keduanya
         combined = self._combine_metadata_candidates(exact_cands, kw_cands)
         if not combined:
             return {}
+
+        # Normalisasi skor ke rentang 0-1 agar bisa digabung dengan skor BM25 dan SBERT
         max_score = max(s for _, s in combined)
         return {fid: float(s) / max(float(max_score), 1.0) for fid, s in combined}
 
@@ -625,23 +691,32 @@ class SearchService:
         Mode lookup  : metadata(0.35) + BM25(0.35) + SBERT(0.30)
         Mode semantic: BM25(0.40) + SBERT(0.60)
         """
+        # Kalau tidak dikirim dari luar, pakai nilai default dari config
         top_k_chunks = top_k_chunks or settings.TOP_K_CHUNKS
         top_k_files = top_k_files or settings.TOP_K_FILES
+
+        # Cek ulang di sini karena search() bisa dipanggil langsung tanpa lewat _plan_query
         file_lookup_mode = self._is_file_lookup_query(query)
 
-        # 1. Bersihkan query untuk BM25 dan SBERT embedding
+        # Bersihkan query
+        # Buang kata tidak penting seperti "tolong", "cari", "dimana" sebelum dikirim ke BM25 dan SBERT
         clean_query = self._strip_query_noise(query)
         embed_query = clean_query or query
 
-        # 2. Retrieve dari 3 sumber paralel
+        # Ambil kandidat dari 3 sumber
+        # Ambil dua kali lipat chunk agar ada ruang untuk penggabungan per file
         retrieve_k = top_k_chunks * 2
+        # SBERT: ubah query jadi vektor, cari chunk yang vektornya paling mirip di pgvector
         sbert_rows = self._retrieve_sbert_chunks(embed_query, db, retrieve_k)
+        # BM25: cari chunk yang kata-katanya paling cocok dengan query
         bm25_results = self._retrieve_bm25_chunks(clean_query, db, retrieve_k)
+        # Metadata: cari file yang nama atau path-nya mengandung kata dari query (lookup saja)
         meta_candidates: Dict[int, float] = {}
         if file_lookup_mode:
             meta_candidates = self._get_metadata_candidates(query, db, top_k_files)
 
-        # 3. Bangun per-file dict dari SBERT
+        # Bangun struktur data per file dari hasil SBERT 
+        # files_dict memakai file_id sebagai kunci agar semua chunk dari file yang sama terkumpul
         files_dict: Dict[int, Dict] = {}
         for row in sbert_rows:
             fid = int(row.file_id)
@@ -654,6 +729,7 @@ class SearchService:
                     "_sbert_sims": [], "_bm25_sims": [], "meta_score": 0.0,
                     "relevant_chunks": [],
                 }
+            # Kumpulkan semua skor SBERT dari berbagai chunk milik file ini
             files_dict[fid]["_sbert_sims"].append(float(row.similarity))
             if (row.chunk_text or "").strip():
                 files_dict[fid]["relevant_chunks"].append({
@@ -664,7 +740,8 @@ class SearchService:
                     "boosted_similarity": float(row.similarity),
                 })
 
-        # 4. Tambahkan skor BM25
+        # Masukkan skor BM25 ke files_dict 
+        # File yang belum ada di files_dict (hanya masuk via BM25) tetap dibuat entry-nya
         for chunk in bm25_results:
             fid = int(chunk["file_id"])
             if fid not in files_dict:
@@ -677,9 +754,11 @@ class SearchService:
                     "_sbert_sims": [], "_bm25_sims": [], "meta_score": 0.0,
                     "relevant_chunks": [],
                 }
+            # bm25_score_norm adalah skor BM25 yang sudah dinormalisasi ke rentang 0-1
             files_dict[fid]["_bm25_sims"].append(chunk["bm25_score_norm"])
 
-        # 5. Tambahkan skor metadata (lookup only)
+        # Masukkan skor metadata ke files_dict (hanya mode lookup) 
+        # File yang hanya ditemukan via metadata tapi belum ada di files_dict tetap diambil dari DB
         for fid, meta_score in meta_candidates.items():
             if fid not in files_dict:
                 file_meta = db.query(File).filter(File.id == fid).first()
@@ -696,28 +775,37 @@ class SearchService:
                 }
             files_dict[fid]["meta_score"] = float(meta_score)
 
-        # 6. Fetch chunks untuk file yang hanya masuk via BM25/metadata (tidak ada dari SBERT)
+        # Ambil chunk untuk file yang belum punya chunk sama sekali
+        # Terjadi kalau file masuk via BM25 atau metadata tapi tidak ada di hasil SBERT
+        # Ubah query jadi vektor 512 dimensi, dipakai untuk cari chunk paling relevan per file
         query_embedding = self.embedder.embed_text(embed_query)
         for fid, fdata in files_dict.items():
+            # Hanya proses file yang belum punya chunk sama sekali
             if not fdata["relevant_chunks"]:
+                # Query ke DB: ambil 3 chunk dari file ini yang paling mirip vektornya dengan query
                 chunks = self._fetch_top_chunks_for_file(db, fid, str(query_embedding), limit=3)
+                # Simpan chunk ke relevant_chunks, tambahkan field raw dan boosted similarity
                 fdata["relevant_chunks"] = [
                     {**c, "raw_similarity": c["similarity"], "boosted_similarity": c["similarity"]}
                     for c in chunks
                 ]
+                # Isi juga _sbert_sims agar score fusion di langkah 7 punya data SBERT untuk file ini
                 fdata["_sbert_sims"] = [c["similarity"] for c in fdata["relevant_chunks"]]
 
-        # 7. Score fusion per file
+        # Hitung skor akhir per file (score fusion)
         for fdata in files_dict.values():
+            # Ambil rata-rata dari 3 skor SBERT tertinggi milik file ini
             sbert_top3 = sorted(fdata["_sbert_sims"], reverse=True)[:3]
             sbert_agg = sum(sbert_top3) / len(sbert_top3) if sbert_top3 else 0.0
             sbert_max = max(fdata["_sbert_sims"]) if fdata["_sbert_sims"] else 0.0
 
+            # Ambil rata-rata dari 3 skor BM25 tertinggi milik file ini
             bm25_top3 = sorted(fdata["_bm25_sims"], reverse=True)[:3]
             bm25_agg = sum(bm25_top3) / len(bm25_top3) if bm25_top3 else 0.0
 
             meta_score = fdata["meta_score"]
 
+            # Gabungkan skor dengan bobot sesuai mode
             if file_lookup_mode:
                 rank_score = (
                     float(settings.HYBRID_LOOKUP_META_WEIGHT) * meta_score
@@ -731,19 +819,21 @@ class SearchService:
                 )
 
             fdata["rank_score"] = float(rank_score)
-            fdata["max_similarity"] = float(rank_score)  # kompatibilitas UI
+            # max_similarity dipakai UI untuk tampilkan skor relevansi
+            fdata["max_similarity"] = float(rank_score)
             fdata["avg_top3"] = float(sbert_agg)
             fdata["max_sim"] = float(sbert_max)
             fdata["bm25_score"] = float(bm25_agg)
 
+            # Urutkan chunk tiap file dari yang paling relevan
             fdata["relevant_chunks"] = sorted(
                 fdata["relevant_chunks"], key=lambda c: c["similarity"], reverse=True
             )
-            # Hapus field internal
+            # Hapus field sementara yang hanya dipakai selama kalkulasi, tidak perlu dikirim ke UI
             del fdata["_sbert_sims"]
             del fdata["_bm25_sims"]
 
-        # 8. Urutkan dan kembalikan top-K
+        # Urutkan semua file by skor dan ambil top-K
         return sorted(files_dict.values(), key=lambda x: x["rank_score"], reverse=True)[:top_k_files]
 
     def search_raw_chunks(

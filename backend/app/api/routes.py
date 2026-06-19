@@ -93,6 +93,7 @@ def get_gdrive() -> GoogleDriveService:
 
 def _merge_search_results(primary: List[dict], secondary: List[dict]) -> List[dict]:
     """Gabungkan hasil dua retrieval pass sambil menjaga chunk terbaik per file."""
+    # merged adalah dict dengan kunci file_id, berisi data file hasil gabungan
     merged: dict[int, dict] = {}
 
     def add_results(results: List[dict]):
@@ -102,33 +103,40 @@ def _merge_search_results(primary: List[dict], secondary: List[dict]) -> List[di
                 continue
 
             existing = merged.get(file_id)
+            # File belum pernah masuk ke merged, langsung tambahkan
             if existing is None:
                 merged[file_id] = dict(item)
                 continue
 
+            # File sudah ada di merged, update skor kalau yang baru lebih tinggi
             if float(item.get("max_similarity", 0.0)) > float(existing.get("max_similarity", 0.0)):
                 existing["max_similarity"] = float(item.get("max_similarity", 0.0))
                 if "rank_score" in item:
                     existing["rank_score"] = float(item.get("rank_score", 0.0))
 
+            # Gabungkan chunk dari kedua hasil, hindari chunk duplikat pakai seen_chunk_ids
             existing_chunks = existing.get("relevant_chunks", []) or []
             seen_chunk_ids = {chunk.get("chunk_id") for chunk in existing_chunks}
             for chunk in item.get("relevant_chunks", []) or []:
                 chunk_id = chunk.get("chunk_id")
+                # Chunk yang sama sudah ada, lewati
                 if chunk_id in seen_chunk_ids:
                     continue
                 existing_chunks.append(chunk)
                 seen_chunk_ids.add(chunk_id)
 
+            # Urutkan semua chunk milik file ini dari similarity tertinggi
             existing["relevant_chunks"] = sorted(
                 existing_chunks,
                 key=lambda c: c.get("similarity", 0.0),
                 reverse=True,
             )
 
+    # Masukkan hasil primary dulu, lalu secondary
     add_results(primary)
     add_results(secondary)
 
+    # Urutkan semua file hasil gabungan berdasarkan skor tertinggi
     return sorted(
         merged.values(),
         key=lambda x: x.get("max_similarity", 0.0),
@@ -170,20 +178,24 @@ def _virtual_directory_path(file_path: str | None, source: str | None) -> str | 
 
 def _plan_query(searcher: SearchService, rag: RAGService, raw_query: str) -> dict:
     """Plan query dulu, lalu siapkan query retrieval yang lebih kuat."""
+    # Minta LLM rewrite query jadi lebih ringkas + deteksi intent (file_lookup/content_qa/general)
     planned = rag.plan_query_for_retrieval(raw_query)
     rewritten_query = str(planned.get("rewritten_query") or raw_query).strip()
     keywords = planned.get("keywords") or []
 
+    # Tempelkan keyword dari LLM ke query rewrite kalau belum ada di dalamnya
     if keywords:
         keyword_tail = " ".join(str(item) for item in keywords if str(item).strip())
         if keyword_tail and keyword_tail not in rewritten_query.lower():
             rewritten_query = f"{rewritten_query} {keyword_tail}".strip()
 
+    # Deteksi mode lookup dari 3 sumber: query asli, query rewrite, dan intent LLM
     lookup_by_raw = searcher.is_file_lookup_query(raw_query)
     lookup_by_rewrite = searcher.is_file_lookup_query(rewritten_query)
     lookup_by_intent = bool(planned.get("intent") == "file_lookup")
     is_lookup = lookup_by_raw or lookup_by_rewrite or lookup_by_intent
 
+    # Lookup pakai query asli agar nama file tidak berubah; semantic pakai rewrite yang lebih bersih
     retrieval_query = raw_query if is_lookup else (rewritten_query or raw_query)
 
     planned["retrieval_query"] = retrieval_query
@@ -199,31 +211,42 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
     """Endpoint utama chatbot."""
     start_time = time.time()
 
+    # Ambil singleton SearchService (berisi SBERT dan bm25) dan RAGService (tahu alamat Ollama)
     searcher = get_searcher()
     rag = get_rag()
 
+    # Rewrite query pakai LLM, sekaligus deteksi apakah ini pencarian file atau pertanyaan isi dokumen
     query_plan = _plan_query(searcher, rag, request.message)
     retrieval_query = str(query_plan.get("retrieval_query") or request.message)
     is_lookup = bool(query_plan.get("is_lookup"))
+
+    # Mode pencarian file butuh lebih banyak kandidat agar file yang dicari tidak terlewat = 15
     candidate_top_k_files = max(int(settings.TOP_K_FILES or 5) * 3, 15) if is_lookup else None
 
+    # Search pertama pakai query hasil rewrite LLM
     search_results = searcher.search(retrieval_query, db, top_k_files=candidate_top_k_files)
     primary_tag = "rewritten" if retrieval_query.strip() != request.message.strip() else "raw"
     _tag_results_provenance(search_results, primary_tag)
+
+    # Kalau query rewrite berbeda dari aslinya, search sekali lagi pakai query asli lalu gabungkan
     if retrieval_query.strip() != request.message.strip():
         raw_results = searcher.search(request.message, db, top_k_files=candidate_top_k_files)
         _tag_results_provenance(raw_results, "raw")
         search_results = _merge_search_results(search_results, raw_results)
 
+    # Ambil 5 file teratas untuk dikirim ke LLM
     top_k = int(settings.TOP_K_FILES or 5)
     top_results = search_results[:top_k]
 
+    # Kirim query asli beserta chunk dari 5 file teratas ke LLM untuk dibuat jawaban
     answer = rag.generate_response(
         request.message,
         top_results,
         file_lookup_mode=is_lookup,
     )
 
+    # Pencarian file tidak perlu rerank, urutan dari search sudah cukup
+    # Pertanyaan isi dokumen diurutkan ulang berdasarkan seberapa cocok isi file dengan jawaban LLM
     if is_lookup:
         grounded_results = top_results
     else:
@@ -232,9 +255,14 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
 
     response_time_ms = int((time.time() - start_time) * 1000)
 
+    # Simpan percakapan ke tabel chat_history di database
     chat_record = ChatHistory(
+        # Pesan asli dari user
         user_message=request.message,
+        # Jawaban teks yang dihasilkan LLM
         bot_response=answer,
+        # Daftar file yang ditemukan disimpan sebagai JSON string
+        # ensure_ascii=False agar karakter Indonesia tidak diubah jadi kode \uXXXX
         retrieved_files=json.dumps([
             {
                 "file_name": r["file_name"],
@@ -243,11 +271,15 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
             }
             for r in grounded_results
         ], ensure_ascii=False),
+        # Waktu total dari request masuk sampai jawaban siap, dalam milidetik
         response_time_ms=response_time_ms,
     )
+    # Tambahkan record ke session database, belum tersimpan ke disk
     db.add(chat_record)
+    # Commit: tulis permanen ke PostgreSQL
     db.commit()
 
+    # Konversi hasil search dari dict ke objek FileInfo sesuai format response
     retrieved_files = [
         FileInfo(
             file_id=r["file_id"],
@@ -282,7 +314,7 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
 
 
 # =====================================================================
-# SEARCH ENDPOINT (tanpa RAG)
+# SEARCH ENDPOINT (tanpa RAG) ga dipakai
 # =====================================================================
 @router.post("/search", response_model=SearchResponse)
 def search(request: SearchRequest, db: Session = Depends(get_db)):

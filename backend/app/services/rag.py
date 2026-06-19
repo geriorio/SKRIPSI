@@ -31,6 +31,7 @@ class RAGService:
     def plan_query_for_retrieval(self, query: str) -> Dict[str, object]:
         """Rencanakan query sebelum retrieval: rewrite, keyword extraction, dan intent."""
         raw_query = (query or "").strip()
+        # Query kosong tidak perlu diproses, langsung return default
         if not raw_query:
             return {
                 "original_query": "",
@@ -40,6 +41,7 @@ class RAGService:
                 "used_llm": False,
             }
 
+        # Prompt instruksi ke LLM: minta rewrite query + ekstrak keyword + deteksi intent
         rewrite_prompt = f"""
 Kamu adalah query planner untuk sistem retrieval dokumen.
 Ubah query user menjadi versi yang lebih retrieval-friendly.
@@ -60,24 +62,31 @@ Query user: {raw_query}
 
         llm_payload = None
         try:
+            # Kirim prompt ke Ollama, parse jawaban teks jadi dict Python
             raw = self._call_ollama(rewrite_prompt)
             llm_payload = self._parse_json_response(raw)
         except Exception as exc:
             logger.info("Query planning via LLM gagal, pakai fallback heuristik: %s", exc)
 
+        # Ollama mati atau jawaban tidak valid, pakai deteksi heuristik manual
         if not llm_payload:
             return self._fallback_plan_query(raw_query)
 
+        # Ambil rewritten_query; kalau LLM tidak mengisi, pakai query asli
         rewritten_query = str(llm_payload.get("rewritten_query") or raw_query).strip()
+
+        # Bersihkan keywords: pastikan list, buang yang kosong atau bukan string
         keywords = llm_payload.get("keywords") or []
         if not isinstance(keywords, list):
             keywords = []
         keywords = [str(item).strip() for item in keywords if str(item).strip()]
 
+        # Validasi intent: hanya 3 nilai yang diizinkan, selain itu pakai "general"
         intent = str(llm_payload.get("intent") or "general").strip().lower()
         if intent not in {"file_lookup", "content_qa", "general"}:
             intent = "general"
 
+        # Fallback terakhir jika rewritten_query masih kosong setelah semua proses
         if not rewritten_query:
             rewritten_query = raw_query
 
@@ -99,6 +108,7 @@ Query user: {raw_query}
         file_lookup_mode: bool = False,
     ) -> str:
         """Hasilkan jawaban berdasarkan query + konteks dokumen."""
+        # Kalau tidak ada file yang ditemukan sama sekali, langsung return pesan kosong
         if not search_results:
             return (
                 "Maaf, saya tidak menemukan dokumen yang relevan dengan "
@@ -106,8 +116,9 @@ Query user: {raw_query}
                 "file sudah di-index."
             )
 
-        # Jika mode cari file aktif tetapi belum ada chunk teks terbaca,
-        # berikan fallback berbasis metadata agar user tetap mendapat lokasi file.
+        # Khusus mode lookup: cek apakah ada chunk yang punya teks isi
+        # Kalau semua chunk kosong (file ditemukan tapi belum dibaca isinya),
+        # berikan fallback yang hanya tampilkan nama dan lokasi file saja
         if file_lookup_mode:
             has_text_context = any(
                 (chunk.get("chunk_text") or "").strip()
@@ -117,17 +128,23 @@ Query user: {raw_query}
             if not has_text_context:
                 return self._metadata_only_file_lookup_response(search_results)
 
+        # Rakit semua chunk dari 5 file menjadi satu teks konteks
+        # ambil maksimal 5 chunk per file
         context = self._build_context(
             search_results,
             max_results=None,
             max_chunks=5,
         )
+        # Bungkus konteks + query user menjadi prompt lengkap dengan instruksi ke LLM
         prompt = self._build_prompt(query, context)
 
         try:
+            # Kirim prompt ke Ollama, tunggu jawaban teks
             answer = self._call_ollama(prompt)
+            # Hapus kalimat "tidak ditemukan" di akhir kalau jawaban sudah ada isinya
             return self._strip_trailing_not_found(answer)
         except requests.ConnectionError:
+            # Ollama tidak berjalan, tampilkan daftar file saja sebagai fallback
             logger.error("Tidak dapat terhubung ke Ollama. Pastikan Ollama berjalan.")
             return (
                 "⚠️ Tidak dapat terhubung ke Ollama LLM. "
@@ -136,6 +153,7 @@ Query user: {raw_query}
                 + self._fallback_response(search_results)
             )
         except Exception as e:
+            # Error lain saat memanggil Ollama, tetap tampilkan daftar file
             logger.error(f"Error saat memanggil Ollama: {e}")
             return (
                 f"⚠️ Terjadi kesalahan saat menghasilkan jawaban: {e}\n\n"
@@ -154,32 +172,41 @@ Query user: {raw_query}
         if not search_results:
             return []
 
+        # Pecah jawaban LLM jadi set kata unik, dipakai untuk dibandingkan dengan isi dokumen
         answer_terms = self._tokenize(answer)
+        # Kalau jawaban kosong atau tidak bisa ditokenisasi, kembalikan urutan asli tanpa rerank
         if not answer_terms:
             return search_results
 
         reranked: List[Dict] = []
         for result in search_results:
+            # Gabungkan semua teks chunk dari file ini menjadi satu string
             doc_text = " ".join(
                 chunk.get("chunk_text", "")
                 for chunk in result.get("relevant_chunks", [])
             )
+            # Pecah teks dokumen jadi set kata unik
             doc_terms = self._tokenize(doc_text)
 
+            # Hitung berapa kata yang sama antara jawaban LLM dan isi dokumen
             overlap = len(answer_terms & doc_terms)
+            # Coverage: proporsi kata jawaban yang didukung dokumen ini (0.0 sampai 1.0)
             coverage = overlap / max(len(answer_terms), 1)
 
+            # Ambil skor retrieval awal dari score fusion sebelumnya
             retrieval_score = float(result.get("max_similarity", 0.0))
 
-            # 70% dukungan terhadap jawaban + 30% retrieval score awal.
+            # Skor akhir: 70% dari seberapa banyak dokumen mendukung jawaban + 30% skor retrieval awal
             grounded_score = (0.70 * coverage) + (0.30 * retrieval_score)
 
+            # Buat salinan dict file agar tidak mengubah data asli
             updated = dict(result)
             updated["grounded_score"] = float(grounded_score)
-            # Pertahankan kompatibilitas UI lama: field max_similarity dipakai sebagai skor utama.
+            # Timpa max_similarity dengan grounded_score agar UI menampilkan skor rerank yang baru
             updated["max_similarity"] = float(grounded_score)
             reranked.append(updated)
 
+        # Urutkan dari grounded_score tertinggi ke terendah
         reranked.sort(key=lambda x: x.get("grounded_score", 0.0), reverse=True)
         return reranked
 
@@ -194,18 +221,24 @@ Query user: {raw_query}
     ) -> str:
         """Gabungkan chunk-chunk dari file-file relevan sebagai konteks."""
         context_parts = []
+        # Kalau max_results diisi, potong jumlah file; kalau None pakai semua (dipanggil dengan None = semua 5 file)
         selected_results = search_results[:max_results] if max_results else search_results
         for i, result in enumerate(selected_results, 1):
+            # Header tiap dokumen: nomor urut, nama file, dan lokasi path
             header = (
                 f"[Dokumen {i}] {result['file_name']} "
                 f"(Lokasi: {result['file_path']})"
             )
             chunks = result.get("relevant_chunks", [])
+            # Batasi jumlah chunk per file agar konteks tidak terlalu panjang
             if max_chunks:
                 chunks = chunks[:max_chunks]
+            # Gabungkan semua chunk jadi satu teks, pisah dengan baris baru
             chunks_text = "\n".join(chunk["chunk_text"] for chunk in chunks)
+            # Satu entri konteks = header + isi chunk
             context_parts.append(f"{header}\n{chunks_text}")
 
+        # Pisahkan tiap dokumen dengan garis pemisah agar LLM bisa bedakan batas antar dokumen
         return "\n\n---\n\n".join(context_parts)
 
     def _build_prompt(self, query: str, context: str) -> str:
