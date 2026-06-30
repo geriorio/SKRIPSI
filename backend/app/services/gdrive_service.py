@@ -106,6 +106,7 @@ class GoogleDriveService:
         with open(self.token_file, "w", encoding="utf-8") as f:
             f.write(creds.to_json())
 
+    #refresh token agar tidak expired, jika expired dan ada refresh token, otomatis di-refresh
     def _load_credentials(self) -> Optional[Credentials]:
         self._ensure_paths()
         token_path = Path(self.token_file)
